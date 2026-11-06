@@ -1,0 +1,4 @@
+[submodule "public_frontend"]
+	path = public_frontend
+	url = https://github.com/Axel1102/CASINO-web.git
+	branch = main

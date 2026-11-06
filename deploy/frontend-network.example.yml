@@ -1,0 +1,14 @@
+# 合併到「外部公開前端專案」的 Compose，不是本專案的啟動檔。
+# 將 frontend 改為該專案實際服務名；保留該服務既有 edge/default 網路及公開 HTTPS port。
+services:
+  frontend:
+    networks:
+      - default
+      - lab_content
+    # 若使用 SSR/BFF，可由該前端應用讀取此變數；靜態 Nginx 使用下面的片段。
+    environment:
+      LAB_API_INTERNAL_URL: http://lab-public-api:8000
+networks:
+  lab_content:
+    external: true
+    name: lab-content

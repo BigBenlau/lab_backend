@@ -1,0 +1,989 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lab Public API",
+    "description": "修訂版公開契約：4 個 GET；匿名唯讀 SQLite，儲存即公開，僅供 Docker 內網。",
+    "version": "7.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://lab-public-api:8000",
+      "description": "Docker lab-content 內網；瀏覽器不可直連"
+    }
+  ],
+  "paths": {
+    "/api/v1/public/home": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "取得首頁內容",
+        "description": "同一快照回傳全部 group_photo 合照、入庫倒序前三篇論文摘要及論文總數。固定網站文字由前端維護。",
+        "operationId": "home_api_v1_public_home_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Home"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "資料或路徑不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "不支援此方法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "請求超過 256 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "欄位型別、範圍或關聯無效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SQLite 儲存忙碌或不可用；代理產生的 503 也可能不是 JSON。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/people": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "取得全部成員簡介",
+        "description": "包含成員及校友，按姓／名／ID排序；不含完整聯絡方式、興趣或論文資料，空資料回傳 []。",
+        "operationId": "people_api_v1_public_people_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PersonSummary"
+                  },
+                  "type": "array",
+                  "title": "Response People Api V1 Public People Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "資料或路徑不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "不支援此方法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "請求超過 256 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "欄位型別、範圍或關聯無效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SQLite 儲存忙碌或不可用；代理產生的 503 也可能不是 JSON。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/people/{person_id}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "取得單人成員詳情及論文",
+        "description": "person_id 僅匹配 ID；person 與 publications 來自同一 SQLite 快照，作者關聯按 authors[].personId 判定。",
+        "operationId": "person_detail_api_v1_public_people__person_id__get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "成員不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "不支援此方法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "請求超過 256 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "欄位型別、範圍或關聯無效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SQLite 儲存忙碌或不可用；代理產生的 503 也可能不是 JSON。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/publications": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "取得全部論文",
+        "description": "按新增入庫順序倒序，保留 authors 署名順序。pdfPath 是同源 PDF 路徑或 null；無單篇論文接口。",
+        "operationId": "publications_api_v1_public_publications_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PublicPublication"
+                  },
+                  "type": "array",
+                  "title": "Response Publications Api V1 Public Publications Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "資料或路徑不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "不支援此方法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "請求超過 256 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "欄位型別、範圍或關聯無效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "SQLite 儲存忙碌或不可用；代理產生的 503 也可能不是 JSON。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Detail"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 50000
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ApiError"
+      },
+      "Asset": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$",
+            "title": "Id"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AssetMetadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "url"
+        ],
+        "title": "Asset"
+      },
+      "AssetMetadata": {
+        "properties": {
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "image/svg+xml",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "application/pdf"
+            ],
+            "title": "Mimetype",
+            "default": "image/png"
+          },
+          "alt": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Alt",
+            "default": ""
+          },
+          "caption": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caption"
+          },
+          "credit": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Credit",
+            "default": ""
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "group_photo",
+              "other"
+            ],
+            "title": "Purpose",
+            "default": "other"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AssetMetadata",
+        "description": "用途決定是否進首頁相簿；不依檔名或固定 ID 猜測合照。"
+      },
+      "Author": {
+        "properties": {
+          "personId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personid"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "Author"
+      },
+      "Counts": {
+        "properties": {
+          "publications": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Publications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "publications"
+        ],
+        "title": "Counts"
+      },
+      "Home": {
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/Asset"
+            },
+            "type": "array",
+            "title": "Assets"
+          },
+          "recentPublications": {
+            "items": {
+              "$ref": "#/components/schemas/PublicationSummary"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Recentpublications"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assets",
+          "recentPublications",
+          "counts"
+        ],
+        "title": "Home",
+        "description": "首頁僅提供全部合照、最近三篇摘要及論文總數。"
+      },
+      "ImageMetadata": {
+        "properties": {
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "image/svg+xml",
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ],
+            "title": "Mimetype",
+            "default": "image/png"
+          },
+          "alt": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Alt",
+            "default": ""
+          },
+          "caption": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caption"
+          },
+          "credit": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Credit",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ImageMetadata",
+        "description": "圖片描述集中為一個物件；寬高由前端 CSS 與圖片本身決定。"
+      },
+      "Link": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "url"
+        ],
+        "title": "Link"
+      },
+      "Membership": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Role"
+          },
+          "isCurrent": {
+            "type": "boolean",
+            "title": "Iscurrent",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "Membership"
+      },
+      "PersonDetail": {
+        "properties": {
+          "person": {
+            "$ref": "#/components/schemas/PublicPerson"
+          },
+          "publications": {
+            "items": {
+              "$ref": "#/components/schemas/PublicPublication"
+            },
+            "type": "array",
+            "title": "Publications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "person",
+          "publications"
+        ],
+        "title": "PersonDetail",
+        "description": "單人成員及其論文共用同一次 SQLite 讀取快照。"
+      },
+      "PersonSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$",
+            "title": "Id"
+          },
+          "familyName": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Familyname"
+          },
+          "givenName": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Givenname"
+          },
+          "englishName": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Englishname"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Name"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Title"
+          },
+          "portrait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Photo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bioMarkdown": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Biomarkdown"
+          },
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            },
+            "type": "array",
+            "title": "Memberships"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "familyName",
+          "givenName",
+          "englishName",
+          "name",
+          "title",
+          "portrait",
+          "bioMarkdown",
+          "memberships"
+        ],
+        "title": "PersonSummary",
+        "description": "成員目錄只帶名片與簡介；完整履歷、聯絡方式及論文由詳情取得。"
+      },
+      "Photo": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ImageMetadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "Photo",
+        "description": "照片直接儲存在 people.portrait；沿用網址＋metadata 的形狀。"
+      },
+      "PublicPerson": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$",
+            "title": "Id"
+          },
+          "familyName": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Familyname"
+          },
+          "givenName": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Givenname"
+          },
+          "englishName": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Englishname"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Name"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Title"
+          },
+          "portrait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Photo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bioMarkdown": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Biomarkdown"
+          },
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            },
+            "type": "array",
+            "title": "Memberships"
+          },
+          "interests": {
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "type": "array",
+            "title": "Interests"
+          },
+          "publicEmail": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publicemail"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "familyName",
+          "givenName",
+          "englishName",
+          "name",
+          "title",
+          "portrait",
+          "bioMarkdown",
+          "memberships",
+          "interests",
+          "publicEmail",
+          "links"
+        ],
+        "title": "PublicPerson",
+        "description": "只增加個人頁實際使用的欄位；論文清單由外層 publications 提供。"
+      },
+      "PublicPublication": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "year": {
+            "type": "integer",
+            "maximum": 2200.0,
+            "minimum": 1800.0,
+            "title": "Year"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "conference",
+              "journal",
+              "workshop"
+            ],
+            "title": "Type"
+          },
+          "venue": {
+            "$ref": "#/components/schemas/Venue"
+          },
+          "authors": {
+            "items": {
+              "$ref": "#/components/schemas/Author"
+            },
+            "type": "array",
+            "title": "Authors"
+          },
+          "pdfPath": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1,
+                "pattern": "^/assets/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[pP][dD][fF]$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdfpath"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Sourceurl"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "year",
+          "type",
+          "venue",
+          "authors",
+          "pdfPath",
+          "sourceUrl"
+        ],
+        "title": "PublicPublication",
+        "description": "列表與站內論文頁共用，不附加儲存時間或網址別名。"
+      },
+      "PublicationSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "year": {
+            "type": "integer",
+            "maximum": 2200.0,
+            "minimum": 1800.0,
+            "title": "Year"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "conference",
+              "journal",
+              "workshop"
+            ],
+            "title": "Type"
+          },
+          "venue": {
+            "$ref": "#/components/schemas/Venue"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "year",
+          "type",
+          "venue"
+        ],
+        "title": "PublicationSummary",
+        "description": "首頁論文卡片；作者、PDF 與來源連結留給論文列表／詳情。"
+      },
+      "Venue": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Name",
+            "default": ""
+          },
+          "shortName": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Shortname",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Venue"
+      }
+    }
+  }
+}

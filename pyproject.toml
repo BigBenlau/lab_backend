@@ -1,0 +1,17 @@
+[project]
+name = "lab-website"
+version = "0.1.0"
+description = "Small lab content API with SQLite transactions and CSV import"
+requires-python = ">=3.14,<3.15"
+# requirements.lock 固定安裝版本；此處列出維護時的相容範圍。
+dependencies = ["fastapi>=0.120,<1", "pydantic>=2.12,<3", "uvicorn>=0.38,<1", "argon2-cffi>=25.1,<26", "cryptography>=46,<48"]
+
+[project.scripts]
+lab = "lab_backend.cli:main"
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["lab_backend*"]

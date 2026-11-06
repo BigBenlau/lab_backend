@@ -1,0 +1,300 @@
+{
+  "/api/v1/public/home": {
+    "assets": [
+      {
+        "id": "group-01",
+        "url": "/assets/samples/group-01.jpg",
+        "metadata": {
+          "mimeType": "image/jpeg",
+          "alt": "Synthetic group photo one",
+          "caption": "Example group gathering",
+          "credit": "Synthetic sample",
+          "purpose": "group_photo"
+        }
+      },
+      {
+        "id": "group-new",
+        "url": "/assets/samples/group-new.jpg",
+        "metadata": {
+          "mimeType": "image/jpeg",
+          "alt": "Synthetic group photo two",
+          "caption": "Another example gathering",
+          "credit": "Synthetic sample",
+          "purpose": "group_photo"
+        }
+      }
+    ],
+    "recentPublications": [
+      {
+        "id": "paper-4",
+        "title": "Synthetic Paper 4",
+        "year": 2023,
+        "type": "conference",
+        "venue": {
+          "name": "Example Conference",
+          "shortName": "EX4"
+        }
+      },
+      {
+        "id": "paper-3",
+        "title": "Synthetic Paper 3",
+        "year": 2025,
+        "type": "workshop",
+        "venue": {
+          "name": "Example Workshop",
+          "shortName": "EX3"
+        }
+      },
+      {
+        "id": "paper-2",
+        "title": "Synthetic Paper 2",
+        "year": 2024,
+        "type": "journal",
+        "venue": {
+          "name": "Example Journal",
+          "shortName": "EX2"
+        }
+      }
+    ],
+    "counts": {
+      "publications": 4
+    }
+  },
+  "/api/v1/public/people": [
+    {
+      "id": "member-example",
+      "familyName": "Example",
+      "givenName": "An",
+      "englishName": "Avery",
+      "name": "An Example",
+      "title": "PhD student",
+      "portrait": {
+        "url": "/assets/samples/member-example.jpg",
+        "metadata": {
+          "mimeType": "image/jpeg",
+          "alt": "Synthetic portrait",
+          "caption": null,
+          "credit": "Synthetic sample"
+        }
+      },
+      "bioMarkdown": "A fictional member for API integration.\n\n- Studies secure systems\n- Builds reproducible examples",
+      "memberships": [
+        {
+          "role": "phd_student",
+          "isCurrent": true
+        }
+      ]
+    },
+    {
+      "id": "member-sample",
+      "familyName": "Sample",
+      "givenName": "Bo",
+      "englishName": null,
+      "name": "Bo Sample",
+      "title": "Former researcher",
+      "portrait": null,
+      "bioMarkdown": "A fictional former member for API integration.",
+      "memberships": [
+        {
+          "role": "research_assistant",
+          "isCurrent": false
+        }
+      ]
+    }
+  ],
+  "/api/v1/public/people/member-example": {
+    "person": {
+      "id": "member-example",
+      "familyName": "Example",
+      "givenName": "An",
+      "englishName": "Avery",
+      "name": "An Example",
+      "title": "PhD student",
+      "portrait": {
+        "url": "/assets/samples/member-example.jpg",
+        "metadata": {
+          "mimeType": "image/jpeg",
+          "alt": "Synthetic portrait",
+          "caption": null,
+          "credit": "Synthetic sample"
+        }
+      },
+      "bioMarkdown": "A fictional member for API integration.\n\n- Studies secure systems\n- Builds reproducible examples",
+      "memberships": [
+        {
+          "role": "phd_student",
+          "isCurrent": true
+        }
+      ],
+      "interests": [
+        "Systems security",
+        "Human-computer interaction"
+      ],
+      "publicEmail": "member@example.invalid",
+      "links": [
+        {
+          "label": "Homepage",
+          "url": "https://example.invalid/member"
+        }
+      ]
+    },
+    "publications": [
+      {
+        "id": "paper-4",
+        "title": "Synthetic Paper 4",
+        "year": 2023,
+        "type": "conference",
+        "venue": {
+          "name": "Example Conference",
+          "shortName": "EX4"
+        },
+        "authors": [
+          {
+            "personId": null,
+            "name": "External Example Author"
+          },
+          {
+            "personId": "member-example",
+            "name": "An Example"
+          }
+        ],
+        "pdfPath": "/assets/papers/sample-4.pdf",
+        "sourceUrl": "https://example.invalid/papers/4"
+      },
+      {
+        "id": "paper-3",
+        "title": "Synthetic Paper 3",
+        "year": 2025,
+        "type": "workshop",
+        "venue": {
+          "name": "Example Workshop",
+          "shortName": "EX3"
+        },
+        "authors": [
+          {
+            "personId": "member-example",
+            "name": "An Example"
+          },
+          {
+            "personId": "member-sample",
+            "name": "Bo Sample"
+          }
+        ],
+        "pdfPath": "/assets/papers/sample-3.pdf",
+        "sourceUrl": "https://example.invalid/papers/3"
+      },
+      {
+        "id": "paper-1",
+        "title": "Synthetic Paper 1",
+        "year": 2026,
+        "type": "conference",
+        "venue": {
+          "name": "Example Conference",
+          "shortName": "EX1"
+        },
+        "authors": [
+          {
+            "personId": "member-example",
+            "name": "An Example"
+          },
+          {
+            "personId": null,
+            "name": "External Example Author"
+          }
+        ],
+        "pdfPath": "/assets/papers/sample-1.pdf",
+        "sourceUrl": "https://example.invalid/papers/1"
+      }
+    ]
+  },
+  "/api/v1/public/publications": [
+    {
+      "id": "paper-4",
+      "title": "Synthetic Paper 4",
+      "year": 2023,
+      "type": "conference",
+      "venue": {
+        "name": "Example Conference",
+        "shortName": "EX4"
+      },
+      "authors": [
+        {
+          "personId": null,
+          "name": "External Example Author"
+        },
+        {
+          "personId": "member-example",
+          "name": "An Example"
+        }
+      ],
+      "pdfPath": "/assets/papers/sample-4.pdf",
+      "sourceUrl": "https://example.invalid/papers/4"
+    },
+    {
+      "id": "paper-3",
+      "title": "Synthetic Paper 3",
+      "year": 2025,
+      "type": "workshop",
+      "venue": {
+        "name": "Example Workshop",
+        "shortName": "EX3"
+      },
+      "authors": [
+        {
+          "personId": "member-example",
+          "name": "An Example"
+        },
+        {
+          "personId": "member-sample",
+          "name": "Bo Sample"
+        }
+      ],
+      "pdfPath": "/assets/papers/sample-3.pdf",
+      "sourceUrl": "https://example.invalid/papers/3"
+    },
+    {
+      "id": "paper-2",
+      "title": "Synthetic Paper 2",
+      "year": 2024,
+      "type": "journal",
+      "venue": {
+        "name": "Example Journal",
+        "shortName": "EX2"
+      },
+      "authors": [
+        {
+          "personId": "member-sample",
+          "name": "Bo Sample"
+        },
+        {
+          "personId": null,
+          "name": "External Example Author"
+        }
+      ],
+      "pdfPath": null,
+      "sourceUrl": "https://example.invalid/papers/2"
+    },
+    {
+      "id": "paper-1",
+      "title": "Synthetic Paper 1",
+      "year": 2026,
+      "type": "conference",
+      "venue": {
+        "name": "Example Conference",
+        "shortName": "EX1"
+      },
+      "authors": [
+        {
+          "personId": "member-example",
+          "name": "An Example"
+        },
+        {
+          "personId": null,
+          "name": "External Example Author"
+        }
+      ],
+      "pdfPath": "/assets/papers/sample-1.pdf",
+      "sourceUrl": "https://example.invalid/papers/1"
+    }
+  ]
+}
