@@ -1,0 +1,20 @@
+# Python 3.14；精確解析版本。升級請重新解析並另行安排相容性/漏洞驗收。
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.16.0
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
+cffi==2.1.1
+click==8.5.0
+cryptography==47.0.0
+fastapi==0.162.0
+h11==0.16.0
+idna==3.20
+opentelemetry-api==1.45.2
+pycparser==3.12
+pydantic==2.14.2
+pydantic_core==2.50.2
+starlette==1.10.0
+typing-inspection==0.4.5
+typing_extensions==4.16.0
+uvicorn==0.54.0

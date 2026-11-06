@@ -1,0 +1,12 @@
+# 搭配lab-monitor.service，告警由主機監控收集journal及service退出狀態。
+[Unit]
+Description=Check Lab API and backup health every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=5s
+Persistent=true
+Unit=lab-monitor.service
+
+[Install]
+WantedBy=timers.target

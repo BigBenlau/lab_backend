@@ -1,0 +1,102 @@
+# 從專案根目錄使用 docker compose --env-file .env -f deploy/compose.yml ...
+# 目前只生成設定，尚未執行 Docker 或驗證 Linux 掛載。
+x-api: &api
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: lab-api:demo
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  pids_limit: 100
+  mem_limit: 512m
+  cpus: 1.0
+  tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 15s
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+  public-api:
+    <<: *api
+    environment:
+      LAB_STORAGE: /data
+    networks:
+      frontend_net:
+        aliases: [lab-public-api]
+    volumes:
+      - type: bind
+        source: ${LAB_STORAGE_HOST:?Set storage directory}/content
+        target: /data/content
+        read_only: true
+        bind: {create_host_path: false}
+
+  admin-api:
+    <<: *api
+    command: ["python", "-m", "uvicorn", "lab_backend.application:admin_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-proxy-headers", "--no-access-log", "--limit-concurrency", "8"]
+    environment:
+      LAB_STORAGE: /data
+      LAB_ADMIN_ORIGIN: ${LAB_ADMIN_ORIGIN:?Set exact HTTPS admin origin}
+      LAB_DEV: "false"
+    networks: [admin_net]
+    volumes:
+      - type: bind
+        source: ${LAB_STORAGE_HOST:?Set storage directory}/private
+        target: /data/private
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${LAB_STORAGE_HOST:?Set storage directory}/content
+        target: /data/content
+        bind: {create_host_path: false}
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    image: lab-gateway:demo
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.5
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"]
+    environment:
+      ADMIN_HOST: ${ADMIN_HOST:?Set admin hostname}
+    ports:
+      # Demo gateway 預設僅供本機；兩個 API 不映射主機端口。
+      - "${ADMIN_BIND_IP:-127.0.0.1}:9443:9443"
+    networks: [admin_edge, admin_net]
+    volumes:
+      - type: bind
+        source: ${TLS_CERT_HOST:?Set certificate file}
+        target: /run/tls/cert.pem
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${TLS_KEY_HOST:?Set TLS key file}
+        target: /run/tls/key.pem
+        read_only: true
+        bind: {create_host_path: false}
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+networks:
+  # 公開前端的伺服器容器加入此網路；API 不發布宿主機 port。
+  frontend_net:
+    name: ${LAB_CONTENT_NETWORK:-lab-content}
+    internal: true
+  admin_edge: {}
+  admin_net:
+    internal: true

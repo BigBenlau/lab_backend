@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>管理員登入 · Lab 內容管理</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <!-- 登入前只顯示此頁；管理介面待 Session 確認後才顯示。 -->
+  <section id="login-page" class="login-page" aria-labelledby="login-title">
+    <div class="login-intro">
+      <p class="eyebrow">LAB CONTENT MANAGER</p>
+      <h1>實驗室內容管理</h1>
+      <p>維護團隊成員、研究成果與網站資訊。</p>
+      <p class="login-caption">內容儲存後，即可在公開網站讀取。</p>
+    </div>
+    <form id="login-form" class="login-card" method="post" action="/api/v1/auth/login">
+      <h2 id="login-title">管理員登入</h2>
+      <p class="muted">使用你的管理員帳號登入。</p>
+      <label>帳號<input name="login" required autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="80"></label>
+      <label>密碼<input name="password" type="password" required autocomplete="current-password" maxlength="128"></label>
+      <p id="login-error" role="alert" class="error"></p>
+      <button type="submit">登入管理後台</button>
+      <p class="login-help">無法登入或需要新帳號，請聯絡系統管理員。</p>
+    </form>
+  </section>
+
+  <!-- 各功能使用 hash 路由，共用一份 HTML，重新整理仍回到同一頁。 -->
+  <div id="admin-shell" hidden>
+    <header class="app-header">
+      <h1>Lab 內容管理</h1>
+      <span id="identity"></span>
+      <button id="logout" type="button">登出</button>
+    </header>
+    <div class="app-layout">
+      <aside class="sidebar">
+        <p class="nav-label">管理工作台</p>
+        <nav id="navigation" aria-label="管理功能"></nav>
+      </aside>
+      <main class="main-content">
+        <p id="notice" role="status" aria-live="polite"></p>
+        <section id="workspace" tabindex="-1" aria-label="目前管理頁面"></section>
+      </main>
+    </div>
+  </div>
+
+  <noscript>此管理介面需要啟用 JavaScript。</noscript>
+</body>
+</html>

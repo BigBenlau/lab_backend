@@ -1,0 +1,6 @@
+FROM nginx:1.30.6-alpine
+COPY admin_frontend/admin /srv/admin
+COPY deploy/nginx.conf.template /etc/lab/nginx.conf.template
+COPY deploy/gateway-entrypoint.sh /etc/lab/entrypoint.sh
+USER 10001:10001
+ENTRYPOINT ["/bin/sh", "/etc/lab/entrypoint.sh"]

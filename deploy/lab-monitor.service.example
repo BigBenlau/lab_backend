@@ -1,0 +1,18 @@
+# 複製為lab-monitor.service後調整路徑及執行帳戶；本檔不會自動安裝。
+[Unit]
+Description=Lab API readiness, disk and backup monitor
+After=docker.service
+
+[Service]
+Type=oneshot
+User=lab
+Group=lab
+WorkingDirectory=/srv/lab
+Environment=LAB_STORAGE=/srv/lab/storage
+Environment=LAB_ADMIN_ORIGIN=https://admin.lab.example
+ExecStart=/srv/lab/.venv/bin/python /srv/lab/scripts/maintenance.py monitor --env-file /srv/lab/.env --compose-file /srv/lab/deploy/compose.yml
+TimeoutStartSec=90
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
