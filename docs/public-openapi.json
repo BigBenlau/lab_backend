@@ -3,7 +3,7 @@
   "info": {
     "title": "Lab Public API",
     "description": "修訂版公開契約：4 個 GET；匿名唯讀 SQLite，儲存即公開，僅供 Docker 內網。",
-    "version": "7.0.0"
+    "version": "7.1.0"
   },
   "servers": [
     {
@@ -694,6 +694,21 @@
             },
             "type": "array",
             "title": "Memberships"
+          },
+          "graduationDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7,
+                "minLength": 7,
+                "pattern": "^(?:[1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(?:0[1-9]|1[0-2])$",
+                "description": "畢業年月YYYY-MM或null；只有memberships非空且全部isCurrent=false的校友可填，其他必須null。"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduationdate"
           }
         },
         "additionalProperties": false,
@@ -707,7 +722,8 @@
           "title",
           "portrait",
           "bioMarkdown",
-          "memberships"
+          "memberships",
+          "graduationDate"
         ],
         "title": "PersonSummary",
         "description": "成員目錄只帶名片與簡介；完整履歷、聯絡方式及論文由詳情取得。"
@@ -797,6 +813,21 @@
             "type": "array",
             "title": "Memberships"
           },
+          "graduationDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7,
+                "minLength": 7,
+                "pattern": "^(?:[1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(?:0[1-9]|1[0-2])$",
+                "description": "畢業年月YYYY-MM或null；只有memberships非空且全部isCurrent=false的校友可填，其他必須null。"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduationdate"
+          },
           "interests": {
             "items": {
               "type": "string",
@@ -837,6 +868,7 @@
           "portrait",
           "bioMarkdown",
           "memberships",
+          "graduationDate",
           "interests",
           "publicEmail",
           "links"

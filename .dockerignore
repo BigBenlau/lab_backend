@@ -18,3 +18,16 @@ exports
 **/*.enc
 **/*.zip
 **/*.tar*
+
+# 部署只使用程式、鎖定依賴及靜態管理頁；開發資料不送入建置context。
+docs
+tests
+README.md
+AGENTS.md
+ARCHITECTURE.md
+pyproject.toml
+requirements-dev.lock
+scripts/check_basics.py
+scripts/sync_contracts.py
+**/.DS_Store
+**/*.pyc

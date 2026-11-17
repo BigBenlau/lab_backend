@@ -1,4 +1,4 @@
-"""容器內的內容匯入、檔案檢查、靜態備份及監測；不開啟HTTP listener。"""
+"""容器內的檔案檢查、靜態備份及監測；資料匯入統一使用lab_backend.cli。"""
 from pathlib import Path, PurePosixPath
 from datetime import datetime, timezone
 import argparse
@@ -16,7 +16,7 @@ import uuid
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lab_backend.cli import (atomic_json, backup_job, backup_state, content_hash, file_hash, import_csv)
+from lab_backend.cli import atomic_json, backup_job, backup_state, content_hash, file_hash
 from lab_backend.config import Config
 from lab_backend.models import now
 from lab_backend.store import Store, exclusive_lock, json_loads, read_file, sync_dir, write_new
@@ -280,7 +280,6 @@ def main():
     """明確指定離線操作；不讀取lab.json，錯誤只回類型避免輸出秘密。"""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
-    imp = sub.add_parser('import-csv'); imp.add_argument('directory', type=Path); imp.add_argument('--apply', action='store_true')
     check = sub.add_parser('check-files'); check.add_argument('web_root', type=Path)
     bak = sub.add_parser('backup-static')
     bak.add_argument('web_root', type=Path); bak.add_argument('output', type=Path)
@@ -296,7 +295,6 @@ def main():
     config = Config.load()
     store = Store(config.storage)
     try:
-        if args.command == 'import-csv': import_csv(store, args.directory, args.apply); return 0
         if args.command == 'check-files': result = check_files(store, args.web_root)
         elif args.command == 'backup-static':
             manifest = backup_static(store, args.web_root, args.output, args.version, args.database_backup)

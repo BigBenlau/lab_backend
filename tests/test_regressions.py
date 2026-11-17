@@ -445,7 +445,7 @@ class RegressionTests(unittest.TestCase):
                 expected = {(key,) for key, sql_type, _ in documented if ('PK' in sql_type or 'UNIQUE' in sql_type) and key != '_singleton'}
                 self.assertEqual(unique, expected)
                 count += len(actual)
-        self.assertEqual(count, 46)
+        self.assertEqual(count, 47)
 
     def test_merged_history_is_server_owned_and_not_public(self):
         """管理歷史保留建立者；公開頁面不再需要時間或操作者。"""
@@ -541,7 +541,7 @@ class RegressionTests(unittest.TestCase):
                 self.assertEqual(summaries[0]['bioMarkdown'], 'Intro')
                 self.assertNotIn('publicationIds', summaries[0])
                 self.assertNotIn('publicEmail', summaries[0])
-                self.assertEqual(set(summaries[0]), {'id', 'familyName', 'givenName', 'englishName', 'name', 'title', 'portrait', 'bioMarkdown', 'memberships'})
+                self.assertEqual(set(summaries[0]), {'id', 'familyName', 'givenName', 'englishName', 'name', 'title', 'portrait', 'bioMarkdown', 'memberships', 'graduationDate'})
                 _, detail = await request(app, '/api/v1/public/people/p1')
                 self.assertEqual([p['id'] for p in detail['publications']], ['paper4', 'paper3', 'paper1', 'paper2'])
                 self.assertEqual(set(detail['person']), set(summaries[0]) | {'interests', 'publicEmail', 'links'})
@@ -598,6 +598,140 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual((await request(app, '/api/v1/admin/content/assets', method='POST', body={'data': invalid}, **auth))[0], 422)
             self.assertEqual(self.store.read(('assets',))['assets'], [])
         self.with_app(run)
+
+    def test_graduation_month_admin_public_and_invalid_updates(self):
+        """年月從SQLite回傳；不補日期、不改身份，錯誤更新不留下部分內容或審計。"""
+        async def run(app):
+            token, session = app.state.security.issue(self.user)
+            auth = {'token': token, 'csrf': session.csrf}
+            path = '/api/v1/admin/content/people'
+            data = {'id': 'alumni', 'familyName': 'Example', 'givenName': 'Alex',
+                    'memberships': [{'role': 'masters_student', 'isCurrent': False}], 'graduationDate': '2026-06'}
+            status, row = await request(app, path, method='POST', body={'data': data}, **auth)
+            self.assertEqual(status, 201)
+            self.assertEqual(row['data']['graduationDate'], '2026-06')
+            with self.store.connection() as conn:
+                self.assertEqual(conn.execute('SELECT graduationDate FROM content.people WHERE id=?', ('alumni',)).fetchone()[0], '2026-06')
+            self.assertEqual((await request(app, path, **auth))[1]['items'][0]['data']['graduationDate'], '2026-06')
+            before = self.store.read(include_audit=True)
+            for invalid in ('', '2026', '2026-6', '2026-00', '2026-13', '0000-01', '2026-06-01', '2026-06 ', '２０２６-０６', 202606, True):
+                with self.subTest(invalid=invalid):
+                    status, _ = await request(app, path + '/alumni', method='PUT',
+                        body={'data': {**data, 'graduationDate': invalid}, 'version': row['version']}, **auth)
+                    self.assertEqual(status, 422)
+                    self.assertEqual(self.store.read(include_audit=True), before)
+            # 同一公開app在每次更新後讀到新值，並保留其餘身份欄位。
+            public = public_app()
+            for month in ('0001-01', '9999-12', None, '2024-02'):
+                status, row = await request(app, path + '/alumni', method='PUT',
+                    body={'data': {**data, 'graduationDate': month}, 'version': row['version']}, **auth)
+                self.assertEqual(status, 200)
+                self.assertEqual((await request(public, '/api/v1/public/people'))[1][0]['graduationDate'], month)
+                person = (await request(public, '/api/v1/public/people/alumni'))[1]['person']
+                self.assertEqual(person['graduationDate'], month)
+                self.assertEqual(person['memberships'], data['memberships'])
+            status, row = await request(app, path + '/alumni', method='PUT',
+                body={'data': {k: v for k, v in data.items() if k != 'graduationDate'}, 'version': row['version']}, **auth)
+            self.assertEqual(status, 200)
+            self.assertIsNone(row['data']['graduationDate'])
+            with self.store.connection() as conn:
+                self.assertIsNone(conn.execute('SELECT graduationDate FROM content.people WHERE id=?', ('alumni',)).fetchone()[0])
+        self.with_app(run)
+
+    def test_graduation_month_csv_preview_apply_and_batch_rejection(self):
+        """CSV使用相同年月規則；預覽不寫入，合法年月與null保留，壞列整批拒絕。"""
+        people = [Person(id='alumni', familyName='Example', givenName='Alex', graduationDate='2026-06', memberships=[{'role': 'masters_student', 'isCurrent': False}]).model_dump(),
+                  Person(id='current', familyName='Example', givenName='Sam').model_dump()]
+        directory = self.csv_batch(people)
+        before = self.store.read(include_audit=True)
+        import_csv(self.store, directory)
+        self.assertEqual(self.store.read(include_audit=True), before)
+        import_csv(self.store, directory, apply=True)
+        self.assertEqual({p['id']: p['graduationDate'] for p in self.public.read(('people',))['people']},
+                         {'alumni': '2026-06', 'current': None})
+        before = self.store.read(include_audit=True)
+        rows = [{**people[0], 'id': 'valid-new'}, {**people[0], 'id': 'bad-new', 'graduationDate': '2026-13'}]
+        (directory / 'people.csv').write_text(encode_csv('people', rows, private=False))
+        for apply in (False, True):
+            with self.assertRaises(ValueError):
+                import_csv(self.store, directory, apply=apply)
+            self.assertEqual(self.store.read(include_audit=True), before)
+
+    def test_graduation_month_requires_alumni_and_can_return_to_current(self):
+        """空身份、現任或混合身份不可填日期；轉回現任須在同筆更新明確清空。"""
+        async def run(app):
+            token, session = app.state.security.issue(self.user)
+            auth = {'token': token, 'csrf': session.csrf}
+            path = '/api/v1/admin/content/people'
+            past = {'role': 'masters_student', 'isCurrent': False}
+            current = {'role': 'phd_student', 'isCurrent': True}
+            data = {'id': 'alumni', 'familyName': 'Example', 'givenName': 'Alex',
+                    'memberships': [past], 'graduationDate': '2026-06'}
+            before = self.store.read(include_audit=True)
+            # role寫alumni但仍標為現任，也不能繞過規則。
+            for memberships in ([], [current], [past, current], [{'role': 'alumni'}]):
+                status, _ = await request(app, path, method='POST', body={'data': {**data, 'memberships': memberships}}, **auth)
+                self.assertEqual(status, 422)
+                self.assertEqual(self.store.read(include_audit=True), before)
+            status, row = await request(app, path, method='POST', body={'data': data}, **auth)
+            self.assertEqual(status, 201)
+            before = self.store.read(include_audit=True)
+            for memberships in ([], [current], [past, current]):
+                status, _ = await request(app, path + '/alumni', method='PUT',
+                    body={'data': {**data, 'memberships': memberships}, 'version': row['version']}, **auth)
+                self.assertEqual(status, 422)
+                self.assertEqual(self.store.read(include_audit=True), before)
+            status, row = await request(app, path + '/alumni', method='PUT',
+                body={'data': {**data, 'memberships': [current], 'graduationDate': None}, 'version': row['version']}, **auth)
+            self.assertEqual(status, 200)
+            public = public_app()
+            self.assertIsNone((await request(public, '/api/v1/public/people/alumni'))[1]['person']['graduationDate'])
+            # 多個歷任身份仍是校友；可重新填年月，也允許日期未知的校友。
+            for graduation in ('2026-06', None):
+                status, row = await request(app, path + '/alumni', method='PUT',
+                    body={'data': {**data, 'memberships': [past, {**current, 'isCurrent': False}],
+                                   'graduationDate': graduation}, 'version': row['version']}, **auth)
+                self.assertEqual(status, 200)
+                self.assertEqual((await request(public, '/api/v1/public/people'))[1][0]['graduationDate'], graduation)
+        self.with_app(run)
+
+    def test_graduation_membership_rule_applies_to_offline_batches(self):
+        """CSV整批、初始化及恢復寫入邊界共用身份檢查，錯誤時保留原內容與審計。"""
+        person = Person(id='valid', familyName='Example', givenName='Alex', graduationDate='2026-06',
+                        memberships=[{'role': 'masters_student', 'isCurrent': False}]).model_dump()
+        before = self.store.read(include_audit=True)
+        for memberships in ([], [{'role': 'alumni', 'isCurrent': True}],
+                            [*person['memberships'], {'role': 'phd_student', 'isCurrent': True}]):
+            invalid = {**person, 'id': 'invalid', 'memberships': memberships}
+            directory = self.csv_batch([person, invalid])
+            for apply in (False, True):
+                with self.assertRaises(ValueError):
+                    import_csv(self.store, directory, apply=apply)
+                self.assertEqual(self.store.read(include_audit=True), before)
+            state = copy.deepcopy(before)
+            state['people'] = [{**p, **new_metadata()} for p in (person, invalid)]
+            target = Store(self.root / 'invalid-init')
+            with self.assertRaises(ValueError):
+                target.initialize(state)
+            self.assertFalse(target.root.exists())
+            with self.assertRaises(ValueError):
+                self.store.replace(state)
+            self.assertEqual(self.store.read(include_audit=True), before)
+
+    def test_public_rejects_stored_graduation_with_current_membership(self):
+        """直接損壞暫存庫亦不能讓非校友日期出現在API，讀取失敗回503。"""
+        person = Person(id='alumni', familyName='Example', givenName='Alex', graduationDate='2026-06',
+                        memberships=[{'role': 'masters_student', 'isCurrent': False}]).model_dump()
+        self.store.change(lambda state: state['people'].append({**person, **new_metadata()}))
+        with closing(sqlite3.connect(self.store.content_path)) as conn, conn:
+            conn.execute('UPDATE people SET memberships=? WHERE id=?',
+                         (json.dumps([{'role': 'phd_student', 'isCurrent': True}]), person['id']))
+        async def run():
+            app = public_app()
+            for path in ('/api/v1/public/people', '/api/v1/public/people/alumni'):
+                self.assertEqual((await request(app, path))[0], 503)
+        with self.env():
+            asyncio.run(run())
 
     def test_all_remaining_endpoints_and_removed_resources(self):
         """四個頁面每次查庫，移除端點不會以靜態值回應。"""
@@ -899,7 +1033,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(self.store.read_audit()['items'][0]['action'], 'audit.archived')
 
     def test_encrypted_backup_restore_preview_and_wrong_password(self):
-        self.store.change(lambda s: s['people'].append({**Person(familyName='Test', id='p1', givenName='Backup Member').model_dump(), **new_metadata()}))
+        self.store.change(lambda s: s['people'].append({**Person(familyName='Test', id='p1', givenName='Backup Member', graduationDate='2020-06', memberships=[{'role': 'masters_student', 'isCurrent': False}]).model_dump(), **new_metadata()}))
         self.store.change(lambda s: audit(s, 'admin1', 'backup.test'), resources=())
         archive = self.root / 'backup.enc'
         with self.env(), patch('lab_backend.cli.password_prompt', return_value=self.password):
@@ -919,6 +1053,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(user['authVersion'], self.user['authVersion'] + 1)
         self.assertEqual(other.read_audit()['total'], 2)
         self.assertEqual(Store(other.root, public=True).read(('people',))['people'][0]['givenName'], 'Backup Member')
+        self.assertEqual(Store(other.root, public=True).read(('people',))['people'][0]['graduationDate'], '2020-06')
         for key in ('created', 'updated'):
             self.assertEqual(other.read(('people',))['people'][0][key], self.store.read(('people',))['people'][0][key])
 
@@ -936,16 +1071,17 @@ class RegressionTests(unittest.TestCase):
 
     def test_previous_database_and_backup_formats_are_not_silently_reused(self):
         """欄位已不相容；舊庫只報錯，不自動刪表或冒充新格式。"""
-        with closing(sqlite3.connect(self.store.content_path)) as conn:
-            conn.execute('PRAGMA user_version=6')
-        before = self.store.content_path.read_bytes()
-        with self.assertRaises(StoreError):
-            self.public.read()
-        self.assertEqual(self.store.content_path.read_bytes(), before)
-        archive = self.root / 'old.enc'
-        archive.write_bytes(b'LABSQL6\x00legacy-format')
-        with self.assertRaises(ValueError):
-            read_backup(archive, self.password)
+        for version in (6, 9):
+            with closing(sqlite3.connect(self.store.content_path)) as conn:
+                conn.execute(f'PRAGMA user_version={version}')
+            before = self.store.content_path.read_bytes()
+            with self.assertRaises(StoreError):
+                self.public.read()
+            self.assertEqual(self.store.content_path.read_bytes(), before)
+            archive = self.root / 'old.enc'
+            archive.write_bytes(f'LABSQL{version}\x00legacy-format'.encode())
+            with self.assertRaises(ValueError):
+                read_backup(archive, self.password)
 
     def test_empty_init_without_reference_and_csv_import(self):
         """初始化完全不需要參考JSON，合成CSV匯入後才有內容。"""

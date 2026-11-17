@@ -11,11 +11,10 @@ import tomllib
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--write-openapi', action='store_true', help='同步輸出 public/admin 契約，不啟動服務或讀取業務資料')
-args = parser.parse_args()
+argparse.ArgumentParser(description=__doc__).parse_args()
 from sync_contracts import sync
-specs = sync(check=not args.write_openapi)
+# 檢查只比對，不改檔；需要更新契約時明確執行sync_contracts.py。
+specs = sync(check=True)
 sys.path.insert(0, str(ROOT))
 assert sys.version_info[:2] == (3, 14), '請使用 Python 3.14'
 assert sqlite3.sqlite_version_info >= (3, 37, 0), 'SQLite 需支援 STRICT 表'
@@ -58,6 +57,11 @@ assert set(public['components']['schemas']['PersonDetail']['properties']) == {'p
 assert 'publicationIds' not in public['components']['schemas']['PersonSummary']['properties']
 assert set(public['components']['schemas']['Counts']['properties']) == {'publications'}
 assert 'englishName' in public['components']['schemas']['PersonSummary']['properties']
+for model in ('PersonSummary', 'PublicPerson'):
+    assert 'graduationDate' in public['components']['schemas'][model]['properties']
+    assert 'graduationDate' in public['components']['schemas'][model]['required']
+assert 'graduationDate' not in admin['components']['schemas']['Person']['required']
+assert MODELS['people'].model_fields['graduationDate'].default is None
 assert not {'preferredName', 'slug', 'createdAt', 'updatedAt', 'affiliation', 'publicationIds'} & public['components']['schemas']['PublicPerson']['properties'].keys()
 assert set(public['components']['schemas']['PublicationSummary']['properties']) == {'id', 'title', 'year', 'type', 'venue'}
 assert set(admin['components']['schemas']['Access']['properties']) == {'active', 'version'}

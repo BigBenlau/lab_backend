@@ -3,7 +3,7 @@
   "info": {
     "title": "Lab Admin API",
     "description": "修訂版管理契約：14 個操作模板；Cookie 帳密登入，正式安全驗收另行處理。",
-    "version": "7.0.0"
+    "version": "7.1.0"
   },
   "servers": [
     {
@@ -2983,6 +2983,21 @@
             "title": "Memberships",
             "default": []
           },
+          "graduationDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7,
+                "minLength": 7,
+                "pattern": "^(?:[1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(?:0[1-9]|1[0-2])$",
+                "description": "畢業年月YYYY-MM或null；只有memberships非空且全部isCurrent=false的校友可填，其他必須null。"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduationdate"
+          },
           "publicEmail": {
             "anyOf": [
               {
@@ -3088,6 +3103,21 @@
             "maxItems": 30,
             "title": "Memberships",
             "default": []
+          },
+          "graduationDate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7,
+                "minLength": 7,
+                "pattern": "^(?:[1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(?:0[1-9]|1[0-2])$",
+                "description": "畢業年月YYYY-MM或null；只有memberships非空且全部isCurrent=false的校友可填，其他必須null。"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduationdate"
           },
           "publicEmail": {
             "anyOf": [

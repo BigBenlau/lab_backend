@@ -4,7 +4,7 @@ const $ = (selector) => document.querySelector(selector);
 const state = { user: null, csrf: '', schemas: {}, refs: {}, dirty: false, page: 'dashboard', nextPage: 'dashboard', view: 0, epoch: 0 };
 const titles = { people: '成員與校友', publications: '論文', assets: '資產連結' };
 const pages = { dashboard: '總覽', ...titles, users: '管理員帳戶', audit: '操作紀錄', account: '修改密碼' };
-const labels = { metadata: '資產描述', purpose: '用途（group_photo＝首頁合照，other＝其他）', mimeType: '媒體類型', alt: '替代文字', caption: '說明', credit: '來源／作者', pdfPath: 'PDF 路徑（/assets/...pdf，無檔案時選擇 null）', id: 'ID（穩定識別碼）', name: '名稱', title: '標題／職銜', authors: '作者（依顯示順序）', personId: '關聯成員', year: '年份', venue: '出版會議／期刊', sourceUrl: '來源網址', familyName: '姓氏', givenName: '名字', englishName: '英文名（可留空）', portrait: '個人照片', bioMarkdown: '個人介紹（Markdown）', links: '連結', memberships: '身份／成員類別', isCurrent: '目前身份', publicEmail: '公開 Email', role: '角色', displayName: '顯示名稱' };
+const labels = { metadata: '資產描述', purpose: '用途（group_photo＝首頁合照，other＝其他）', mimeType: '媒體類型', alt: '替代文字', caption: '說明', credit: '來源／作者', pdfPath: 'PDF 路徑（/assets/...pdf，無檔案時選擇 null）', id: 'ID（穩定識別碼）', name: '名稱', title: '標題／職銜', authors: '作者（依顯示順序）', personId: '關聯成員', year: '年份', venue: '出版會議／期刊', sourceUrl: '來源網址', familyName: '姓氏', givenName: '名字', englishName: '英文名（可留空）', portrait: '個人照片', bioMarkdown: '個人介紹（Markdown）', links: '連結', memberships: '身份／成員類別', graduationDate: '畢業年月（僅校友，YYYY-MM，可留空）', isCurrent: '目前身份', publicEmail: '公開 Email', role: '角色', displayName: '顯示名稱' };
 const relations = { personId: 'people' };
 
 // ── 共用 DOM 與 API 操作 ──
@@ -171,6 +171,13 @@ function field(key, spec, value, root, context = {}) {
     if (schema.maximum !== undefined) input.max = schema.maximum;
   } else {
     input = element(/Markdown|caption/.test(key) ? 'textarea' : 'input');
+    // 年月欄位直接回傳YYYY-MM，不轉成Date或補日期，避免時區造成月份偏移。
+    if (key === 'graduationDate') {
+      input.setAttribute('type', 'month');
+      input.setAttribute('min', '0001-01');
+      input.setAttribute('max', '9999-12');
+      input.setAttribute('placeholder', 'YYYY-MM');
+    }
     input.value = value ?? '';
     input.maxLength = schema.maxLength || 50000;
     if (schema.minLength) input.minLength = schema.minLength;
@@ -209,6 +216,7 @@ function editContent(resource, record = null) {
   const schema = state.schemas[resource], data = record?.data || initial(schema, schema);
   const workspace = $('#workspace'); workspace.replaceChildren(element('h2', `${record ? '編輯' : '新增'}：${titles[resource]}`));
   workspace.append(element('p', '儲存後立即更新公開網站內容；ID 建立後不可修改。'));
+  if (resource === 'people') workspace.append(element('p', '畢業年月僅供校友：至少一項身份，且所有「目前身份」均取消勾選；其他成員請保持 null。轉回現任身份時須先清空畢業年月。'));
   // 建立／修改資訊是伺服器維護的整體，只展示、不加入可編輯表單。
   if (record?.created && record?.updated) {
     workspace.append(element('p', `建立：${record.created.at} · ${record.created.by}`),
@@ -236,6 +244,11 @@ function editContent(resource, record = null) {
     event.preventDefault(); error.textContent = ''; save.disabled = true; fields.disabled = true;
     try {
       const changed = controls.read();
+      // 提早提示跨欄位衝突並保留輸入；真正的限制仍由API及離線資料驗證執行。
+      if (resource === 'people' && changed.graduationDate != null &&
+          (!changed.memberships?.length || changed.memberships.some(member => member.isCurrent))) {
+        throw new Error('只有已填身份且全部非現任的校友可填畢業年月，其他成員請保持 null');
+      }
       const path = `/api/v1/admin/content/${resource}` + (record ? `/${encodeURIComponent(data.id)}` : '');
       const result = await api(path, { method: record ? 'PUT' : 'POST', body: { data: changed, version: record?.version ?? null } });
       if (!currentView(view)) return;

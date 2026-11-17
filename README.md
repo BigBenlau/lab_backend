@@ -16,7 +16,7 @@
 
 `lab_backend/`包含八個Python功能模組；`admin_frontend/admin/`為管理頁；`deploy/`提供gateway、public-api、admin-api三個常駐容器。gateway提供HTTPS管理頁與API代理，管理端口可指定（預設27182）；兩API只走Docker內網。獨立官網使用443，管理來源IP由Cloud防火牆管理，後台使用帳密登入。
 
-SQLite保存在一個Docker named volume中：內容庫content.db保存assets、people、publications；管理庫admin.db保存users、audit，共5表46欄。公開API為4個GET，管理／登入為14個操作模板，按資源展開22個操作。
+SQLite保存在一個Docker named volume中：內容庫content.db保存assets、people、publications；管理庫admin.db保存users、audit，共5表47欄。公開API為4個GET，管理／登入為14個操作模板，按資源展開22個操作。
 
 Python與維護工具全部在容器內，VPS只需已有Docker、Compose及可用維護控制台，SSH不必公開。`sh deploy/lab.sh`統一建置、初始化與啟動；tools維護容器按需執行，亦可選擇常駐監測，不需主機Python或systemd。
 

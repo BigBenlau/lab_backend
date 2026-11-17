@@ -108,7 +108,7 @@ def create_app(admin=False):
         errors.update({400: '操作不允許或 JSON 格式錯誤', 401: '登入失效或帳密錯誤',
                        403: 'Origin、CSRF 或權限驗證失敗', 409: '版本、ID 或帳號衝突',
                        415: '非 application/json', 429: '密碼運算忙碌'})
-    app = FastAPI(title='Lab Admin API' if admin else 'Lab Public API', version='7.0.0',
+    app = FastAPI(title='Lab Admin API' if admin else 'Lab Public API', version='7.1.0',
                   description='修訂版管理契約：14 個操作模板；Cookie 帳密登入，正式安全驗收另行處理。' if admin else '修訂版公開契約：4 個 GET；匿名唯讀 SQLite，儲存即公開，僅供 Docker 內網。',
                   servers=[{'url': '/', 'description': '管理頁同源 gateway'}] if admin else [{'url': 'http://lab-public-api:8000', 'description': 'Docker lab-content 內網；瀏覽器不可直連'}],
                   responses={code: {'model': ApiError, 'description': detail} for code, detail in errors.items()},

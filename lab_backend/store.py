@@ -21,7 +21,7 @@ from .models import ALL_MODELS, FILES, META, MODELS, ROW_LIMITS, empty_state, pe
 csv.field_size_limit(1_000_000)
 MAX_FILE = 32 * 1024 * 1024
 MAX_REQUEST = 256 * 1024
-DB_VERSION = 9
+DB_VERSION = 10
 APP_ID = 0x4C414231
 TABLES = {key: name.removesuffix('.csv') for key, name in FILES.items()}
 

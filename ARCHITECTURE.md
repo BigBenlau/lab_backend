@@ -1,6 +1,6 @@
 # 架構與核心要求
 
-Python 3.14／FastAPI／Pydantic／sqlite3，原生HTML／CSS／JavaScript管理頁。維持八個功能模組與三個管理靜態檔，不增加重複多層架構。契約7.0.0、URL前綴/api/v1、SQLite格式9、LABSQL9備份。
+Python 3.14／FastAPI／Pydantic／sqlite3，原生HTML／CSS／JavaScript管理頁。維持八個功能模組與三個管理靜態檔，不增加重複多層架構。契約7.1.0、URL前綴/api/v1、SQLite格式10、LABSQL10備份。
 
 本文只記設計與不可破壞的規則。完整[API](docs/API.md)、[欄位字典](docs/DATABASE.md)、[操作步驟](docs/OPERATIONS.md)及[實際檢查狀態](docs/IMPLEMENTATION_STATUS.md)各自維護，不在多份文件重複欄位定義。
 
@@ -18,7 +18,7 @@ Python 3.14／FastAPI／Pydantic／sqlite3，原生HTML／CSS／JavaScript管理
 | lab_backend/application.py | 兩個API入口、請求邊界、錯誤與健康檢查 |
 | lab_backend/config.py | 環境設定，不在匯入時初始化資料 |
 | lab_backend/cli.py | 空庫初始化、帳戶恢復、CSV、加密備份／恢復 |
-| scripts/maintenance.py | 缺檔、靜態備份／恢復及監測，沿用CLI匯入規則 |
+| scripts/maintenance.py | 缺檔、靜態備份／恢復及監測；CSV匯入統一由cli處理 |
 | scripts/sync_contracts.py | 真實路由→OpenAPI→公開前端型別 |
 | admin_frontend/admin/ | index.html、app.js、style.css；七個功能頁共用API與表單 |
 
@@ -26,12 +26,25 @@ Python 3.14／FastAPI／Pydantic／sqlite3，原生HTML／CSS／JavaScript管理
 
 Pydantic的`str | None`表示可空值，`Literal`限制選項，`Annotated/Field`限制長度與格式。業務模型、儲存歷史及公開投影分開，避免輸入操作者或洩漏私有欄位。管理頁的field/formFields依schema產生表單；accountForm共用帳戶表單，api統一Cookie／CSRF／錯誤。epoch/view阻止舊請求覆蓋新頁面；儲存期間鎖定欄位，失敗保留輸入。
 
+### 契約同步
+
+開發環境使用Python3.14及requirements-dev.lock；以下在專案根目錄執行，不是VPS部署步驟：
+
+```sh
+python scripts/sync_contracts.py --check  # 僅比對兩份OpenAPI及前端型別
+python scripts/sync_contracts.py          # 模型／路由變更後，明確重新生成
+python scripts/check_basics.py            # 僅檢查匯入、契約及設定，不改檔
+```
+
+這些工具不啟動服務或讀取業務資料。生成會更新public_frontend/contracts/public-api.d.ts；該檔屬於獨立子模組，須遵守其指引並分開提交，不能手改生成型別。
+
 ## 資料與交易
 
-SQLite是唯一執行來源，每次請求開新快照，只讀呼叫端明確要求的表，無靜態JSON回退或回應快取。content/content.db保存assets、people、publications；private/admin.db保存users、audit，共5表46欄。users為登入身份，people為網站成員，兩者不自動綁定。
+SQLite是唯一執行來源，每次請求開新快照，只讀呼叫端明確要求的表，無靜態JSON回退或回應快取。content/content.db保存assets、people、publications；private/admin.db保存users、audit，共5表47欄。users為登入身份，people為網站成員，兩者不自動綁定。
 
 - init只建空庫；內容經管理頁或明確CSV匯入。lab.json是真實私人參考，不讀取、複製到程式、提交Git或放進Docker。局部檢查只用合成資料。
 - 全部內容儲存即公開，無草稿／發布／封存。研究方向、招募與固定文字由官網維護；無新聞、設定、UMPASS、瀏覽器上傳或媒體worker。
+- 畢業年月存people.graduationDate，為YYYY-MM或null；僅有至少一項身份且所有isCurrent=false的校友可填，其他必須null。管理API、CSV、恢復及讀取共用模型驗證；不補造日期、自動切換身份或靜默清除日期。成員列表與個人詳情均回傳此欄位。尚未正式部署，SQLite10只初始化新庫，不提供舊庫升級工具。
 - 姓名分姓／名，照片存people.portrait。唯一可寫關聯是authors[].personId；publicationIds在同一快照反查，不雙向重複保存或依同名配對。公開不輸出created/updated或其時間，不暴露操作者。
 - englishName為可留空的英文名；公開個人頁直接回相關publications，publicationIds只留在管理回應。首頁只回metadata.purpose=group_photo的全部合照、前三篇摘要及論文總數；已移除people.slug/sourceUrl/affiliation及publications.slug；管理歷史與版本仍保留。
 - 論文內部按rowid升序讀取，API／管理列表／反查倒序，首頁取前三篇。UPSERT保留位置，CSV依列序新增，備份／恢復保持內部順序；不得自行VACUUM、重排或重建表。

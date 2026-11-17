@@ -83,7 +83,8 @@
           "role": "phd_student",
           "isCurrent": true
         }
-      ]
+      ],
+      "graduationDate": null
     },
     {
       "id": "member-sample",
@@ -99,7 +100,8 @@
           "role": "research_assistant",
           "isCurrent": false
         }
-      ]
+      ],
+      "graduationDate": "2024-06"
     }
   ],
   "/api/v1/public/people/member-example": {
@@ -136,7 +138,8 @@
           "label": "Homepage",
           "url": "https://example.invalid/member"
         }
-      ]
+      ],
+      "graduationDate": null
     },
     "publications": [
       {

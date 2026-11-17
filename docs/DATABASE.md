@@ -1,17 +1,17 @@
-# SQLite資料字典（格式9）
+# SQLite資料字典（格式10）
 
-**2個檔案、5張表、46個欄位**；根目錄由LAB_STORAGE指定。public-api只掛內容目錄唯讀，admin-api可寫兩庫；無獨立DB容器。
+**2個檔案、5張表、47個欄位**；根目錄由LAB_STORAGE指定。public-api只掛內容目錄唯讀，admin-api可寫兩庫；無獨立DB容器。
 
 | 檔案 | 表 | 欄位數 |
 |---|---|---:|
-| content/content.db | assets／people／publications | 6／14／11 |
+| content/content.db | assets／people／publications | 6／15／11 |
 | private/admin.db | users／audit | 9／6 |
 
 全表STRICT；id為TEXT主鍵，users.login唯一，無SQL外鍵、中介表或Session表。布林為INTEGER 0/1，物件／陣列為JSON TEXT，可空值為SQL NULL；預設值由Python提供，無SQL DEFAULT。其餘型別／關聯由Pydantic與交易內驗證。
 
 Id為1–200字元，英數開頭，其餘英數或_-；Name為1–500字元，Short最多500，一般字串最多50000。URL最多2048，允許無帳密的http/https，名為url的欄位另允許./assets/、/assets/；禁止控制字元、反斜線及相對路徑穿越。時間需含時區；API布林只接受true/false。
 
-本版移除people的slug／sourceUrl／affiliation及publications.slug。ID已足夠識別與連結；論文sourceUrl仍用於前端來源連結。管理API／CSV不再接受被移除欄位。
+本版新增people.graduationDate，保存畢業年月。people不含slug／sourceUrl／affiliation，publications不含slug。ID已足夠識別與連結；論文sourceUrl仍用於前端來源連結。管理API／CSV不再接受被移除欄位。
 
 ## 完整欄位
 
@@ -43,6 +43,7 @@ created／updated／_version由系統維護，不屬於可寫data；公開不輸
 | `bioMarkdown` | TEXT | 否 | string（字元≤50000） | `""` | 成員介紹 Markdown |
 | `interests` | TEXT（JSON） | 否 | string（字元≤500）[]（0–100項） | `[]` | 研究興趣文字陣列 |
 | `memberships` | TEXT（JSON） | 否 | Membership[]（0–30項） | `[]` | 身份物件陣列，含在任標記；不是帳戶權限 |
+| `graduationDate` | TEXT | 是 | string（固定7字元，YYYY-MM）或null | `null` | 校友畢業年月，年份0001–9999、月份01–12；非校友只能null，成員列表及詳情均回傳 |
 | `publicEmail` | TEXT | 是 | string（字元≤500） 或 null | `null` | 公開 Email；空值不生成聯絡連結 |
 | `links` | TEXT（JSON） | 否 | Link[]（0–30項） | `[]` | 連結物件陣列，保留原順序 |
 | `_version` | INTEGER | 否 | integer ≥1 | `1` | 內容編輯版本；初始1，每次成功 PUT 加一；回應為外層 version |
@@ -108,6 +109,8 @@ created、updated各為單一JSON物件，例如`{"at":"2026-11-06T10:00:00Z","b
 
 name固定為givenName＋空格＋familyName；englishName獨立保存英文名，可為null或空字串；不參與排序、組合name或論文署名。公開頁面可顯示為name (englishName)。people列表及管理選項按NFKC正規化、casefold、去首尾空白後的姓、名，再按原始ID排序；中文不猜拼音。
 
+graduationDate例如"2026-06"，只保存年月，沒有日或時區；未畢業或未知為null，不使用空字串、完整日期或純年份。省略輸入預設null，PUT省略會清空。填寫資格依memberships判斷：至少一項身份且全部isCurrent=false。空身份視為未確認，任何現任身份或混合身份均只能null，role文字為alumni也不例外。校友可保持null。轉回現任須同次清空日期，否則拒絕整筆；不自動改身份或清除日期。管理API、CSV預覽／套用、初始化、備份恢復及讀庫驗證共用此規則。
+
 唯一可寫關聯是`publications.authors[].personId → people.id`。內部作者指定ID，外部作者為null；署名name獨立保存，成員改名不改論文署名，不按同名自動匹配。缺失ID或刪除被引用成員整筆拒絕，無級聯刪除。
 
 publicationIds只在管理回應展示，公開詳情直接回publications而不重複回ID陣列。兩者在同一快照反查，約O(成員＋作者總數)，同篇去重，不快取或另存清單。users與people不自動綁定；created.by／updated.by／audit.actor為操作者文字，非SQL外鍵。
@@ -120,4 +123,4 @@ pdfPath為null或同源`/assets/papers/paper-1.pdf`。長度1–2048，目錄僅
 
 30人／300篇是估算，不限兩者總筆數；assets/users各1000筆保護。每表解碼JSON與備份CSV各≤32MiB；單筆業務JSON≤252KiB，預留4KiB給HTTP包裝。API、CSV預覽／套用、初始化、恢復共用容量驗證，超限不提交。audit可分頁及串流封存，完整備份超限時先封存歷史。
 
-SQLite9／LABSQL9不隱式遷移舊資料。init只建空庫，lab.json僅為私人參考；一般CSV只新增三類內容，帳戶／審計只在完整備份內。編碼、缺檔檢查及備份步驟見[OPERATIONS](OPERATIONS.md)。
+SQLite10／LABSQL10不隱式遷移舊資料。init只建空庫，lab.json僅為私人參考；一般CSV只新增三類內容，帳戶／審計只在完整備份內。編碼、缺檔檢查及備份步驟見[OPERATIONS](OPERATIONS.md)。
