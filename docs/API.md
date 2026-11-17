@@ -31,6 +31,8 @@ Id為1–200字元，英數開頭，其餘英數／底線／連字號。成員�
 
 管理頁與gateway同源，上游admin-api不開主機port。resource限assets、people、publications：CRUD各4操作，共12；另有schema/references 2、auth 4、users 3、audit 1，合計22。
 
+部署入口為https://ADMIN_HOST:ADMIN_HTTPS_PORT（預設27182），來源IP僅由Cloud防火牆限制，API驗證登入與權限。ADMIN_HOST供Host／Origin驗證，不代替DNS；雲端阻擋通常無API回應。設定方式見[OPERATIONS](OPERATIONS.md)。
+
 | 方法與路徑 | 輸入 | 成功輸出 | 管理頁入口 |
 |---|---|---|---|---|
 | POST /api/v1/auth/login | {login,password} | 200 {user,csrf}＋Cookie | 登入 |

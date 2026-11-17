@@ -1,4 +1,4 @@
-"""離線內容匯入、檔案檢查、靜態備份及主機監測；不開啟HTTP listener。"""
+"""容器內的內容匯入、檔案檢查、靜態備份及監測；不開啟HTTP listener。"""
 from pathlib import Path, PurePosixPath
 from datetime import datetime, timezone
 import argparse
@@ -7,9 +7,11 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 import sys
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 import zipfile
 
@@ -207,13 +209,22 @@ def restore_static(archive_path, database_backup, target, apply=False):
     return {'version': manifest['version'], 'files': len(manifest['files']), 'applied': apply}
 
 
-def compose_probe(base, service, endpoint):
-    """在既有容器內探測loopback，不映射端口、不啟動容器或新增網路。"""
-    program = ("import urllib.request,urllib.error\ntry:\n r=urllib.request.urlopen('http://127.0.0.1:8000/" + endpoint + "',timeout=5);print(r.status)\nexcept urllib.error.HTTPError as e: print(e.code)\nexcept Exception: print(0)")
+def container_probe(service, endpoint, admin_origin):
+    """維護容器直連固定內網端點；不用主機 Python、Docker CLI 或 socket。"""
+    if service not in ('public-api', 'admin-api') or endpoint not in ('healthz', 'readyz'):
+        raise ValueError('不支援的監測端點')
+    # 管理服務會驗證 Host；僅送設定的公開主機名，不送登入 Cookie。
+    headers = {'Host': urllib.parse.urlsplit(admin_origin).netloc} if service == 'admin-api' else {}
+    request = urllib.request.Request(f'http://{service}:8000/{endpoint}', headers=headers)
     try:
-        run = subprocess.run([*base, 'exec', '-T', service, 'python', '-c', program], capture_output=True, text=True, timeout=15)
-        return int(run.stdout.strip()) if run.returncode == 0 else 0
-    except (ValueError, subprocess.TimeoutExpired, OSError):
+        # 禁止沿用 HTTP_PROXY，避免把內部探測送到外部代理。
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        exc.close()
+        return status
+    except (ValueError, OSError):
         return 0
 
 
@@ -278,12 +289,12 @@ def main():
     restore.add_argument('archive', type=Path); restore.add_argument('--database-backup', required=True, type=Path)
     restore.add_argument('--target', required=True, type=Path); restore.add_argument('--apply', action='store_true')
     mon = sub.add_parser('monitor')
-    mon.add_argument('--compose-file', type=Path, default=Path('deploy/compose.yml'))
-    mon.add_argument('--env-file', type=Path, default=Path('.env'))
     mon.add_argument('--min-free-mib', type=int, default=256); mon.add_argument('--max-backup-hours', type=int, default=48)
     mon.add_argument('--threshold', type=int, default=3)
+    mon.add_argument('--interval', type=int, default=0, help='0只檢查一次；正數為容器內重複檢查的間隔秒數')
     args = parser.parse_args()
-    store = Store(Config.load().storage)
+    config = Config.load()
+    store = Store(config.storage)
     try:
         if args.command == 'import-csv': import_csv(store, args.directory, args.apply); return 0
         if args.command == 'check-files': result = check_files(store, args.web_root)
@@ -292,10 +303,16 @@ def main():
             result = {'ok': True, 'version': manifest['version'], 'files': len(manifest['files'])}
         elif args.command == 'restore-static': result = restore_static(args.archive, args.database_backup, args.target, args.apply)
         else:
-            if min(args.min_free_mib, args.max_backup_hours, args.threshold) <= 0: raise ValueError('監測門檻須為正數')
-            base = ['docker', 'compose', '--env-file', str(args.env_file.resolve()), '-f', str(args.compose_file.resolve())]
-            result = monitor(store, lambda service, endpoint: compose_probe(base, service, endpoint),
-                             args.min_free_mib * 1024 * 1024, args.max_backup_hours, args.threshold)
+            if min(args.min_free_mib, args.max_backup_hours, args.threshold) <= 0 or args.interval < 0:
+                raise ValueError('監測門檻須為正數，間隔不可為負數')
+            while True:
+                # 告警不能終止後續採樣；一次性呼叫則仍以退出碼回報失敗。
+                result = monitor(store, lambda service, endpoint: container_probe(service, endpoint, config.admin_origin),
+                                 args.min_free_mib * 1024 * 1024, args.max_backup_hours, args.threshold)
+                print(json.dumps(result, ensure_ascii=False), flush=True)
+                if not args.interval:
+                    return 0 if result['ok'] else 1
+                time.sleep(args.interval)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get('ok', True) else 1
     except Exception as exc:

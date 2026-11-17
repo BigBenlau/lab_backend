@@ -1,4 +1,4 @@
-# 從專案根目錄使用 docker compose --env-file .env -f deploy/compose.yml ...
+# 使用 sh deploy/lab.sh ...；Python、SQLite 與維護工具全部在容器內。
 # 目前只生成設定，尚未執行 Docker 或驗證 Linux 掛載。
 x-api: &api
   build:
@@ -33,29 +33,25 @@ services:
       frontend_net:
         aliases: [lab-public-api]
     volumes:
-      - type: bind
-        source: ${LAB_STORAGE_HOST:?Set storage directory}/content
+      - type: volume
+        source: lab_data
         target: /data/content
         read_only: true
-        bind: {create_host_path: false}
+        # 必須先 init 建立子目錄；不可把整個 volume 掛給公開服務。
+        volume: {subpath: content, nocopy: true}
 
   admin-api:
     <<: *api
     command: ["python", "-m", "uvicorn", "lab_backend.application:admin_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-proxy-headers", "--no-access-log", "--limit-concurrency", "8"]
     environment:
       LAB_STORAGE: /data
-      LAB_ADMIN_ORIGIN: ${LAB_ADMIN_ORIGIN:?Set exact HTTPS admin origin}
+      LAB_ADMIN_ORIGIN: https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}
       LAB_DEV: "false"
     networks: [admin_net]
     volumes:
-      - type: bind
-        source: ${LAB_STORAGE_HOST:?Set storage directory}/private
-        target: /data/private
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${LAB_STORAGE_HOST:?Set storage directory}/content
-        target: /data/content
-        bind: {create_host_path: false}
+      - type: volume
+        source: lab_data
+        target: /data
 
   gateway:
     build:
@@ -73,24 +69,42 @@ services:
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"]
     environment:
       ADMIN_HOST: ${ADMIN_HOST:?Set admin hostname}
+      ADMIN_HTTPS_PORT: ${ADMIN_HTTPS_PORT:-27182}
     ports:
-      # Demo gateway 預設僅供本機；兩個 API 不映射主機端口。
-      - "${ADMIN_BIND_IP:-127.0.0.1}:9443:9443"
+      # 啟動前在 Cloud 防火牆限制管理來源；程式不再維護 IP 清單。
+      # 明確限 IPv4，避免新增未配置雲端防火牆的 IPv6 入口。
+      - "0.0.0.0:${ADMIN_HTTPS_PORT:-27182}:27182"
     networks: [admin_edge, admin_net]
     volumes:
       - type: bind
-        source: ${TLS_CERT_HOST:?Set certificate file}
-        target: /run/tls/cert.pem
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${TLS_KEY_HOST:?Set TLS key file}
-        target: /run/tls/key.pem
+        source: ../secrets/tls
+        target: /run/tls
         read_only: true
         bind: {create_host_path: false}
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
+
+  # 同一 API 映像的維護入口；平常不啟動，不安裝主機 Python／Docker socket。
+  # 明確執行 watch 才常駐監測；只發出內網探測，不提供 HTTP listener。
+  tools:
+    <<: *api
+    profiles: [maintenance]
+    command: ["python", "scripts/maintenance.py", "monitor", "--interval", "60"]
+    environment:
+      LAB_STORAGE: /data
+      LAB_ADMIN_ORIGIN: https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}
+    networks: [frontend_net, admin_net]
+    volumes:
+      - type: volume
+        source: lab_data
+        target: /data
+    healthcheck: {disable: true}
+
+volumes:
+  # 同一個 local volume 保存兩庫與 journal，維持 ATTACH 交易及原掛載路徑。
+  lab_data:
+    driver: local
 
 networks:
   # 公開前端的伺服器容器加入此網路；API 不發布宿主機 port。

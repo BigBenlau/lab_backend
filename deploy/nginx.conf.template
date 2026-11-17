@@ -41,11 +41,12 @@ http {
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
 
     server {
-        listen 9443 ssl default_server;
+        listen 27182 ssl default_server;
         server_name ${ADMIN_HOST};
         if ($host != "${ADMIN_HOST}") { return 444; }
+        # IP 存取由 Cloud 防火牆控制；此處保留合法 Host、TLS 與登入限流。
         set $admin_upstream admin-api:8000;
-        # 登入頁可直接經 HTTPS 使用；權限由 API 逐次驗證，無 VPN 前提。
+        # 可連線仍須帳密／Session，API 逐次檢查權限。
         location = /api/v1/auth/login {
             limit_req zone=login_rate burst=3 nodelay;
             proxy_pass http://$admin_upstream;

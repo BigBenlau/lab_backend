@@ -93,7 +93,7 @@ for resource in ALL_MODELS:
 
 compose = yaml.safe_load((ROOT / 'deploy/compose.yml').read_text())
 services = compose['services']
-assert set(services) == {'gateway', 'public-api', 'admin-api'}
+assert set(services) == {'gateway', 'public-api', 'admin-api', 'tools'}
 for name, service in services.items():
     assert service['read_only'] and service['cap_drop'] == ['ALL']
     assert service['user'] == '10001:10001'
@@ -104,13 +104,22 @@ for name, service in services.items():
 public_mounts = services['public-api']['volumes']
 assert {v['target'] for v in public_mounts} == {'/data/content'}
 assert all(v['read_only'] for v in public_mounts)
-assert {v['target'] for v in services['admin-api']['volumes']} == {'/data/content', '/data/private'}
+assert public_mounts[0]['volume'] == {'subpath': 'content', 'nocopy': True}
+assert public_mounts[0]['type'] == 'volume' and public_mounts[0]['source'] == 'lab_data'
+assert services['admin-api']['volumes'] == services['tools']['volumes'] == [
+    {'type': 'volume', 'source': 'lab_data', 'target': '/data'}]
+assert compose['volumes'] == {'lab_data': {'driver': 'local'}}
+assert services['tools']['profiles'] == ['maintenance']
+assert services['tools']['healthcheck'] == {'disable': True}
+assert set(services['tools']['networks']) == {'frontend_net', 'admin_net'}
+assert all('docker.sock' not in str(service) for service in services.values())
 assert all('/data' not in v['target'] for v in services['gateway']['volumes'])
 assert services['admin-api']['command'].count('1') == 1
 assert services['admin-api']['environment']['LAB_DEV'] == 'false'
 assert not set(services['public-api']['networks']) & set(services['admin-api']['networks'])
 assert not set(services['public-api']['networks']) & set(services['gateway']['networks'])
-assert len(services['gateway']['ports']) == 1 and ':9443:9443' in services['gateway']['ports'][0]
+assert services['gateway']['ports'] == ['0.0.0.0:${ADMIN_HTTPS_PORT:-27182}:27182']
+assert services['admin-api']['environment']['LAB_ADMIN_ORIGIN'] == services['tools']['environment']['LAB_ADMIN_ORIGIN'] == 'https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}'
 assert not services['gateway'].get('depends_on')
 assert compose['networks']['frontend_net']['internal'] is True
 assert services['public-api']['networks']['frontend_net']['aliases'] == ['lab-public-api']
@@ -118,9 +127,15 @@ nginx = (ROOT / 'deploy/nginx.conf.template').read_text()
 assert '8443' not in nginx and '/api/v1/public/' not in nginx
 assert 'resolver 127.0.0.11' in nginx and 'proxy_pass http://$admin_upstream' in nginx
 assert 'X-Real-IP $remote_addr' in nginx
-assert 'ADMIN_ALLOW_CIDR' not in nginx and 'deny all;' not in nginx
+assert 'listen 27182 ssl default_server;' in nginx
+assert 'server_name ${ADMIN_HOST};' in nginx and 'if ($host != "${ADMIN_HOST}")' in nginx
+assert 'set_real_ip_from' not in nginx and 'real_ip_header' not in nginx
+assert not re.search(r'^\s*(allow|deny|satisfy)\s', nginx, re.M), '來源 IP 僅由 Cloud 防火牆管理'
+assert 'admin-allowlist' not in nginx and 'limit_req zone=login_rate' in nginx
 assert 'location ~ ^/api/v1/(auth|admin)/' in nginx and 'location /api/ { return 404; }' in nginx
-assert set(services['gateway']['environment']) == {'ADMIN_HOST'}
+assert set(services['gateway']['environment']) == {'ADMIN_HOST', 'ADMIN_HTTPS_PORT'}
+entrypoint = (ROOT / 'deploy/gateway-entrypoint.sh').read_text()
+assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' in entrypoint
 
 # 同源代理只放行四個頁面端點，不能轉送任意 API 路徑。
 proxy = (ROOT / 'deploy/frontend-proxy.example.conf').read_text()
@@ -136,6 +151,7 @@ assert 'lab.json' in (ROOT / '.dockerignore').read_text().splitlines()
 subprocess.run(['node', '--check', str(ROOT / 'admin_frontend/admin/app.js')], check=True)
 for source in (ROOT / 'public_frontend/dist').glob('*.js'):
     subprocess.run(['node', '--check', str(source)], check=True)
-subprocess.run(['sh', '-n', str(ROOT / 'deploy/gateway-entrypoint.sh')], check=True)
+for source in (ROOT / 'deploy').glob('*.sh'):
+    subprocess.run(['sh', '-n', str(source)], check=True)
 print('PASS: Python imports, public/admin contracts, 5-table dictionary, YAML boundaries, JS/shell syntax.')
 print('Scope: basic checks only. Regression suite is a separate command; no HTTP listener, Docker or deployment here.')

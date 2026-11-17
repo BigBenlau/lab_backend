@@ -12,7 +12,8 @@
 - 寫交易維持ATTACH＋BEGIN IMMEDIATE＋DELETE journal＋FULL synchronous；內容及審計一起提交，鎖內重查權限／版本／關聯，密碼雜湊不持寫鎖。SQL值參數綁定、表名白名單。
 - 公開固定快照後有內容庫journal即503，由管理程序在原環境／原路徑恢復，不刪日誌。只支援單台Linux本機檔案系統、單一admin worker；離線寫入須停管理服務。
 - CSV先預覽再--apply，只新增、既有ID跳過、錯誤整批拒絕；不提供瀏覽器上傳或一般JSON整庫匯入。SQLite9／LABSQL9不兼容舊版，不隱式遷移、覆寫或刪除資料。
-- 兩API無主機端口；gateway預設127.0.0.1:9443，無VPN前提，不加入lab-content；公開前端不加入管理網路。healthz/readyz僅內部探測，DB／靜態備份以版本與SHA256配對。
+- 全Docker部署，VPS只需既有Docker／Compose及可用維護控制台，SSH可不公開，關閉前須驗證救援入口；不安裝主機Python／venv／systemd排程。SQLite用同一local named volume，管理／維護掛/data，public只掛content子目錄唯讀；init顯式建立空庫，勿刪volume或journal。
+- 兩API無主機端口；官網獨立443，gateway以ADMIN_HTTPS_PORT（1024–65535，預設27182）提供HTTPS，ADMIN_HOST／端口同步產生Origin。ADMIN_HOST是應用合法網址設定，不代替Cloud DNS。來源IP僅由Cloud防火牆／安全組管理，不加回ADMIN_ALLOW_CIDRS或程式IP清單；部署前配置雲端限制，換端口不代替身份驗證。不接受客戶端轉發IP，不經額外代理；不加入lab-content，公開前端不加入管理網路。tools按需維護或選配常駐監測，可連兩內網但不開listener、不掛Docker socket。healthz/readyz僅內部探測，DB／靜態備份以版本與SHA256配對。
 - public_frontend是CASINO-web的Git子模組，固定提交、追蹤main、獨立部署。修改先讀其指引，不當普通目錄提交或覆寫。型別由scripts/sync_contracts.py生成，不手改；不聲稱工作區修改已提交／部署。
 - README只介紹專案，不放測試內容。安全與程式閱讀集中ARCHITECTURE，部署與維護集中OPERATIONS；完整欄位只在DATABASE維護。
 - 允許語法／匯入及暫存目錄／程序內ASGI回歸；不啟動Docker、HTTP listener或部署。不要為精簡刪除保護機制或既有回歸覆蓋。
