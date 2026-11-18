@@ -144,6 +144,22 @@ assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' i
 
 # 官網只讀 public 子目錄；API 路徑白名單不得擴張到管理或探測端點。
 web = services['public-web']
+assert web['build'] == {'context': '../public_frontend'}
+subprocess.run(['sh', str(ROOT / 'deploy/lab.sh'), 'check-web'], check=True)
+if (ROOT / '.git').exists():
+    # 僅在 Git 工作目錄檢查索引，阻止「本機有檔案、clone 卻只有 gitlink」再次漏檢。
+    entries = subprocess.check_output(['git', 'ls-files', '--stage', '--', 'public_frontend'], cwd=ROOT, text=True)
+    tracked = {}
+    for entry in entries.splitlines():
+        metadata, path = entry.split('\t', 1)
+        mode, _, stage = metadata.split()
+        assert stage == '0' and mode != '160000', 'public_frontend仍為gitlink或有未解衝突，不能從Git取得完整官網'
+        tracked[path] = mode
+    for name in ('Dockerfile', '.dockerignore', '.gitignore', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
+                 'dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css', 'contracts/public-api.d.ts'):
+        assert tracked.get('public_frontend/' + name) in ('100644', '100755'), f'官網必要檔案尚未納入Git索引：{name}'
+    assert not any(path.startswith(('public_frontend/dist/data/', 'public_frontend/dist/assets/')) or Path(path).name == 'lab.json'
+                   for path in tracked), '初始化內容不得納入官網程式版本'
 assert set(web['networks']) == {'public_edge', 'frontend_net'}
 assert web['ports'] == ['0.0.0.0:443:8443']
 assert web['volumes'][0] == {'type': 'volume', 'source': 'lab_data', 'target': '/srv/public',

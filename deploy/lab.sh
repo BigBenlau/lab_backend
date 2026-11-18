@@ -9,6 +9,33 @@ if [ "${1:-}" = http ]; then
     shift
 fi
 
+check_web() {
+    # 在 Docker 前檢查完整官網程式；只讀檔案狀態，不讀初始化資料或機密。
+    for web_file in Dockerfile .dockerignore nginx.conf nginx-https.conf nginx-http.conf \
+        dist/lab.html dist/lab.js dist/api.js dist/lab.css dist/gold.css; do
+        if [ ! -r "$PROJECT_ROOT/public_frontend/$web_file" ] || [ ! -s "$PROJECT_ROOT/public_frontend/$web_file" ]; then
+            echo "官網建置檔案缺失、空白或不可讀：public_frontend/$web_file" >&2
+            echo '請同步完整 public_frontend 程式；若從 Git 取得，確認它已由舊 gitlink 轉為一般檔案。詳見 docs/OPERATIONS.md。' >&2
+            return 1
+        fi
+    done
+}
+
+check_build() {
+    # 未指定服務代表建置全部；只建後端時不要求官網檔案存在。
+    web_build=false
+    named_service=false
+    for build_arg in "$@"; do
+        case "$build_arg" in
+            public-web) web_build=true; named_service=true ;;
+            public-api|admin-api|gateway|tools) named_service=true ;;
+        esac
+    done
+    if [ "$web_build" = true ] || [ "$named_service" = false ]; then
+        check_web
+    fi
+}
+
 compose() {
     # 固定設定檔位置，不用 source 執行 .env 內容。
     if [ "$LAB_HTTP_MODE" = true ]; then
@@ -18,6 +45,14 @@ compose() {
 }
 
 case "${1:-help}" in
+    check-web)
+        check_web
+        echo '官網建置檔案完整；未呼叫 Docker。'
+        ;;
+    build)
+        check_build "$@"
+        compose "$@"
+        ;;
     init)
         # init 拒絕非空 volume；失敗即停止，不自動清空資料或更改既有帳戶。
         compose run --rm --no-deps tools python -m lab_backend.cli init
@@ -46,6 +81,7 @@ case "${1:-help}" in
     help)
         echo '用法：sh deploy/lab.sh build --pull | init | up -d | ps | logs'
         echo '官網 HTTP：sh deploy/lab.sh http <命令>；80 port，無需憑證，詳見 docs/OPERATIONS.md。'
+        echo '建置前檢查：check-web（只檢查官網程式檔案，不呼叫 Docker）'
         echo '首次內容：seed（預覽）| seed --apply（建立 CSV 與檔案 bundle）'
         echo '維護：cli <命令> | maintenance <命令> | watch'
         echo '其餘參數原樣交給 docker compose；停止容器用 down，勿用 down -v 刪資料。'

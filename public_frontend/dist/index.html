@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#00543c" />
+    <meta
+      name="description"
+      content="CASINO Lab website concept preview: three visual directions based on the new logo."
+    />
+    <title>CASINO Lab · Website Concepts</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body data-concept="overview">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <aside class="concept-switcher" aria-label="Choose a website direction">
+      <div class="switcher-title">
+        <span class="switcher-mark" aria-hidden="true"></span>
+        <span>CASINO · CONCEPTS</span>
+      </div>
+      <div class="switcher-buttons" role="tablist" aria-label="Homepage concept preview">
+        <button class="concept-button is-active" data-target="overview" role="tab" aria-selected="true">
+          <span>00</span>Overview
+        </button>
+        <button class="concept-button" data-target="editorial" role="tab" aria-selected="false">
+          <span>01</span>Ivory
+        </button>
+        <button class="concept-button" data-target="signal" role="tab" aria-selected="false">
+          <span>02</span>Forest
+        </button>
+        <button class="concept-button" data-target="human" role="tab" aria-selected="false">
+          <span>03</span>Gold
+        </button>
+      </div>
+      <p class="switcher-hint">Switch between homepage directions</p>
+    </aside>
+
+    <main id="main-content">
+      <section class="concept-page overview-page is-visible" data-page="overview" aria-labelledby="overview-title">
+        <div class="overview-orbit" aria-hidden="true">
+          <i></i><i></i><i></i>
+        </div>
+        <header class="overview-header">
+          <img src="./assets/casino-logo.jpg" alt="CASINO Collaborative Security and Interaction Group" />
+          <p>Website direction study · 2026</p>
+        </header>
+
+        <div class="overview-copy">
+          <p class="eyebrow">Collaborative Security &amp; Interaction Group</p>
+          <h1 id="overview-title">Three directions.<br />One identity.</h1>
+          <p class="overview-lead">Choose a homepage direction for CASINO Lab.</p>
+          <button class="overview-start" data-jump="editorial">View concepts <span>↗</span></button>
+        </div>
+
+        <div class="palette-card" aria-label="Color palette extracted from the logo">
+          <p>Logo palette</p>
+          <div class="swatch green"><span>#00543C</span></div>
+          <div class="swatch gold"><span>#C69A2D</span></div>
+          <div class="swatch ivory"><span>#F5F1E7</span></div>
+          <p class="palette-note">Forest green · casino gold · warm ivory</p>
+        </div>
+
+        <div class="overview-directions">
+          <button data-jump="editorial">
+            <span>01</span>
+            <strong>Ivory Academic</strong>
+            <small>Ivory · forest green · gold</small>
+          </button>
+          <button data-jump="signal">
+            <span>02</span>
+            <strong>Forest Technical</strong>
+            <small>Forest green · warm white · gold</small>
+          </button>
+          <button data-jump="human">
+            <span>03</span>
+            <strong>Gold Community</strong>
+            <small>Cream · gold · forest green</small>
+          </button>
+        </div>
+      </section>
+
+      <section class="concept-page editorial-page" data-page="editorial" aria-labelledby="editorial-title" hidden>
+        <nav class="ed-nav" aria-label="Main navigation">
+          <a class="ed-brand" href="#editorial" data-jump="editorial">
+            <img src="./assets/casino-logo.jpg" alt="" />
+            <span>CASINO <small>LAB</small></span>
+          </a>
+          <div class="ed-links">
+            <a href="#ed-research">Research</a><a href="#ed-people">People</a><a href="#ed-work">Publications</a><a href="#ed-news">News</a>
+          </div>
+          <a class="ed-join" href="#ed-join">Join the Lab <span>↗</span></a>
+        </nav>
+
+        <div class="ed-hero">
+          <div class="ed-hero-copy">
+            <p class="ed-kicker">University of Macau · Research Group</p>
+            <h1 id="editorial-title">Collaborative Security <em>&amp; Interaction Group</em></h1>
+            <p>
+              We conduct interdisciplinary research in usable security and privacy, digital safety, human–AI interaction, education, and HCI4D.
+            </p>
+            <a href="#ed-research">Explore our research <span>↓</span></a>
+          </div>
+          <div class="ed-group-photo photo-slot">
+            <div class="photo-slot-top"><span>GROUP PHOTO</span><small>16 : 10</small></div>
+            <div class="photo-people" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="photo-slot-bottom"><strong>Lab group photo</strong><span>CASINO Lab</span></div>
+          </div>
+        </div>
+
+        <section class="ed-intro" id="ed-research">
+          <p class="section-number">01 / Research</p>
+          <div>
+            <h2>We work where technical security meets lived experience.</h2>
+            <p>Three connected research areas.</p>
+          </div>
+        </section>
+
+        <div class="ed-themes">
+          <article>
+            <span>01</span><div class="theme-symbol shield"></div>
+            <h3>Usable Security<br />&amp; Privacy</h3>
+            <p>Designing safeguards people can understand, adopt, and trust.</p>
+            <a href="#">View direction ↗</a>
+          </article>
+          <article>
+            <span>02</span><div class="theme-symbol nodes"></div>
+            <h3>Human–AI<br />Interaction</h3>
+            <p>Examining agency, collaboration, and responsibility with AI.</p>
+            <a href="#">View direction ↗</a>
+          </article>
+          <article>
+            <span>03</span><div class="theme-symbol blocks"></div>
+            <h3>Digital Safety<br />in Society</h3>
+            <p>Building safer systems for finance, learning, and communities.</p>
+            <a href="#">View direction ↗</a>
+          </article>
+        </div>
+
+        <section class="ed-feature" id="ed-work">
+          <div class="ed-feature-visual">
+            <span>FEATURED RESEARCH</span>
+            <div class="feature-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="ed-feature-copy">
+            <p class="section-number">02 / Selected work</p>
+            <h2>Research should be legible beyond the paper.</h2>
+            <p>One featured project.</p>
+            <a href="#">Featured project <span>↗</span></a>
+          </div>
+        </section>
+
+        <section class="ed-footer-cta" id="ed-join">
+          <p>03 / Join us</p>
+          <h2>Curious about building safer interactions?</h2>
+          <a href="#">See open positions <span>↗</span></a>
+        </section>
+      </section>
+
+      <section class="concept-page signal-page" data-page="signal" aria-labelledby="signal-title" hidden>
+        <div class="signal-grid-bg" aria-hidden="true"></div>
+        <nav class="sg-nav" aria-label="Main navigation">
+          <a class="sg-brand" href="#signal" data-jump="signal">
+            <span class="sg-logo-shell"><img src="./assets/casino-logo.jpg" alt="" /></span><span>CASINO//LAB</span>
+          </a>
+          <div class="sg-status"><i></i> RESEARCH SYSTEM ONLINE</div>
+          <div class="sg-links"><a href="#sg-domains">DOMAINS</a><a href="#sg-output">OUTPUT</a><a href="#sg-people">PEOPLE</a></div>
+          <a class="sg-menu" href="#sg-contact">CONTACT ↗</a>
+        </nav>
+
+        <div class="sg-hero">
+          <div class="sg-copy">
+            <p>[ UNIVERSITY OF MACAU · RESEARCH GROUP ]</p>
+            <h1 id="signal-title">CASINO<br /><span>LAB</span></h1>
+            <div class="sg-summary">
+              <span>COLLABORATIVE SECURITY<br />+ INTERACTION</span>
+              <p>Usable security and privacy · Digital safety · Human–AI interaction · Education and HCI4D</p>
+            </div>
+          </div>
+          <div class="sg-group-photo photo-slot">
+            <div class="photo-slot-top"><span>GROUP PHOTO</span><small>CASINO LAB</small></div>
+            <div class="photo-people" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="photo-slot-bottom"><strong>LAB GROUP PHOTO</strong><span>UNIVERSITY OF MACAU</span></div>
+          </div>
+        </div>
+
+        <div class="sg-ticker" aria-hidden="true">
+          <div>USABLE SECURITY ✦ HUMAN–AI INTERACTION ✦ DIGITAL SAFETY ✦ PRIVACY ✦ HCI4D ✦ LEARNING TECHNOLOGIES ✦&nbsp;</div>
+        </div>
+
+        <section class="sg-domains" id="sg-domains">
+          <header>
+            <p>01 // ACTIVE DOMAINS</p>
+            <h2>Research as a connected system.</h2>
+          </header>
+          <div class="domain-list">
+            <article><span>01</span><h3>Usable Security</h3><p>HUMAN FACTORS / PRIVACY / BEHAVIOR</p><b>↗</b></article>
+            <article><span>02</span><h3>Human–AI Interaction</h3><p>AGENCY / COLLABORATION / GOVERNANCE</p><b>↗</b></article>
+            <article><span>03</span><h3>Financial &amp; Digital Safety</h3><p>BLOCKCHAINS / RISK / RESILIENCE</p><b>↗</b></article>
+            <article><span>04</span><h3>Learning &amp; HCI4D</h3><p>ACCESS / EDUCATION / COMMUNITIES</p><b>↗</b></article>
+          </div>
+        </section>
+
+        <section class="sg-output" id="sg-output">
+          <div class="output-label"><p>02 // LATEST OUTPUT</p><span>2026</span></div>
+          <div class="output-grid">
+            <article class="output-feature"><small>FEATURED RESEARCH</small><h2>Selected research from CASINO Lab.</h2><p>Projects · Papers · Systems</p><span>VIEW PROJECT ↗</span></article>
+            <article><small>PUBLICATIONS</small><strong>Browse work by year, topic, and venue.</strong><span>OPEN ARCHIVE ↗</span></article>
+            <article><small>NEWS</small><strong>Updates that carry an image and one clear takeaway.</strong><span>VIEW UPDATES ↗</span></article>
+          </div>
+        </section>
+
+        <section class="sg-contact" id="sg-contact">
+          <div><span>OPEN CHANNEL</span><i></i></div>
+          <h2>JOIN THE<br />COLLABORATION.</h2>
+          <a href="#">PHD / RA OPPORTUNITIES ↗</a>
+        </section>
+      </section>
+
+      <section class="concept-page human-page" data-page="human" aria-labelledby="human-title" hidden>
+        <nav class="hm-nav" aria-label="Main navigation">
+          <a class="hm-brand" href="#human" data-jump="human"><img src="./assets/casino-logo.jpg" alt="CASINO Lab" /></a>
+          <div class="hm-links"><a href="#hm-about">About</a><a href="#hm-research">Research</a><a href="#hm-people">People</a><a href="#hm-stories">Stories</a></div>
+          <a class="hm-join" href="#hm-join">Join us <span>↗</span></a>
+        </nav>
+
+        <div class="hm-hero">
+          <div class="hm-copy">
+            <p>University of Macau · Research Group</p>
+            <h1 id="human-title">CASINO Lab</h1>
+            <h2>Collaborative Security and Interaction Group</h2>
+            <p class="hm-summary">Researching usable security, privacy, digital safety, human–AI interaction, education, and HCI4D.</p>
+            <div class="hm-actions"><a href="#hm-research">Meet our research</a><a href="#hm-join">Work with us ↗</a></div>
+          </div>
+          <div class="hm-group-photo photo-slot">
+            <div class="photo-slot-top"><span>OUR GROUP</span><small>University of Macau</small></div>
+            <div class="photo-people" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="photo-slot-bottom"><strong>Lab group photo</strong><span>Landscape crop</span></div>
+          </div>
+        </div>
+
+        <section class="hm-about" id="hm-about">
+          <p>HELLO, WE'RE CASINO.</p>
+          <h2>We are an interdisciplinary group exploring how people understand, use, and reshape secure technology.</h2>
+          <div class="hm-about-foot"><span>Based at the University of Macau</span><a href="#">More about the lab →</a></div>
+        </section>
+
+        <section class="hm-research" id="hm-research">
+          <header><p>What we care about</p><h2>Research with people in the frame.</h2></header>
+          <div class="hm-card-grid">
+            <article class="hm-card card-green"><span>01</span><div class="hm-card-art art-shield"></div><h3>Security that people can actually use.</h3><p>Usable security · Privacy · Digital safety</p><a href="#">Explore ↗</a></article>
+            <article class="hm-card card-gold"><span>02</span><div class="hm-card-art art-chat"></div><h3>AI that supports human agency.</h3><p>Human–AI interaction · Responsible systems</p><a href="#">Explore ↗</a></article>
+            <article class="hm-card card-cream"><span>03</span><div class="hm-card-art art-community"></div><h3>Technology grounded in communities.</h3><p>Education · HCI4D · Financial security</p><a href="#">Explore ↗</a></article>
+          </div>
+        </section>
+
+        <section class="hm-stories" id="hm-stories">
+          <div class="hm-stories-title"><p>From the lab</p><h2>Ideas, experiments,<br />and field notes.</h2></div>
+          <div class="hm-story-list">
+            <article><span>LAB NOTE · 01</span><h3>Research updates and field notes.</h3><a href="#">Read story →</a></article>
+            <article><span>LAB NOTE · 02</span><h3>People, publications, and events.</h3><a href="#">Read story →</a></article>
+          </div>
+        </section>
+
+        <section class="hm-join-section" id="hm-join">
+          <div class="join-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
+          <p>Bring your perspective.</p>
+          <h2>Let's build safer digital futures together.</h2>
+          <a href="#">See PhD &amp; RA opportunities <span>↗</span></a>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

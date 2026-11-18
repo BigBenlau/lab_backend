@@ -79,6 +79,64 @@ class GatewaySettingsTests(unittest.TestCase):
         self.assertEqual(len((self.root / 'calls').read_text().splitlines()), 1)
 
 
+class DeploymentFilesTests(unittest.TestCase):
+    """用暫存來源及命令替身重現缺Dockerfile；不呼叫真正Docker。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='lab deploy ')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'deploy').mkdir()
+        self.entry = self.root / 'deploy/lab.sh'
+        self.entry.write_text((Path(__file__).resolve().parents[1] / 'deploy/lab.sh').read_text())
+        binary = self.root / 'bin'
+        binary.mkdir()
+        docker = binary / 'docker'
+        docker.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$LAB_DOCKER_CALLS"\n')
+        docker.chmod(0o700)
+        self.calls = self.root / 'calls'
+        self.env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
+                    'LAB_DOCKER_CALLS': str(self.calls)}
+
+    def run_command(self, *args):
+        """保留含空格的專案路徑，驗證檢查與Compose參數都正確引用。"""
+        return subprocess.run(['sh', str(self.entry), *args], env=self.env,
+                              capture_output=True, text=True, timeout=5)
+
+    def test_missing_dockerfile_stops_before_docker(self):
+        for args in [('http', 'build', '--pull', 'public-api', 'public-web'), ('build', '--pull')]:
+            result = self.run_command(*args)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('public_frontend/Dockerfile', result.stderr)
+            self.assertFalse(self.calls.exists())
+
+    def test_backend_build_does_not_require_frontend(self):
+        result = self.run_command('http', 'build', '--pull', 'public-api')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
+
+    def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
+        for name in ('Dockerfile', '.dockerignore', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
+                     'dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css'):
+            path = self.root / 'public_frontend' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# synthetic source\n')
+        result = self.run_command('check-web')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.calls.exists())
+        result = self.run_command('http', 'build', '--pull', 'public-api', 'public-web')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.calls.read_text().splitlines()
+        self.assertIn(str(self.root / 'deploy/compose.http.yml'), args)
+        self.assertEqual(args[-4:], ['build', '--pull', 'public-api', 'public-web'])
+        self.calls.unlink()
+        (self.root / 'public_frontend/.dockerignore').write_text('')
+        result = self.run_command('build', '--pull')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('.dockerignore', result.stderr)
+        self.assertFalse(self.calls.exists())
+
+
 class MaintenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='lab-maintenance-')
