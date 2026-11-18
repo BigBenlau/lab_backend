@@ -15,8 +15,9 @@
 - CSV先預覽再--apply，只新增、既有ID跳過、錯誤整批拒絕；不提供瀏覽器上傳或一般JSON整庫匯入。SQLite10／LABSQL10不兼容舊版，不隱式遷移、覆寫或刪除資料。
 - 全Docker部署，VPS只需既有Docker／Compose及可用維護控制台，SSH可不公開，關閉前須驗證救援入口；不安裝主機Python／venv／systemd排程。SQLite用同一local named volume，管理／維護掛/data，public-api只掛content子目錄唯讀，public-web只掛public子目錄唯讀；init顯式建立空庫，勿刪volume或journal。
 - 兩API無主機端口；官網獨立443，gateway以ADMIN_HTTPS_PORT（1024–65535，預設27182）提供HTTPS，ADMIN_HOST／端口同步產生Origin。ADMIN_HOST是應用合法網址設定，不代替Cloud DNS。來源IP僅由Cloud防火牆／安全組管理，不加回ADMIN_ALLOW_CIDRS或程式IP清單；部署前配置雲端限制，換端口不代替身份驗證。不接受客戶端轉發IP，不經額外代理；gateway不加入lab-content，public-web不加入管理網路。tools按需維護或選配常駐監測，可連兩內網但不開listener、不掛Docker socket。healthz/readyz僅內部探測，DB／靜態備份以版本與SHA256配對。
-- 內容測試可明確使用sh deploy/lab.sh http：compose.http.yml以!override取代官網端口及TLS掛載，HTTP80→8080，不需憑證；預設只啟動官網與public-api。共用頁面、資料及路由，不新增管理HTTP入口或放寬登入設定；正式預設仍為HTTPS443。HTTP不發HSTS，不跳轉HTTPS。
+- 內容測試可明確使用sh deploy/lab.sh http：compose.http.yml以!override取代官網端口及TLS掛載，HTTP預設80→8080、主機端口可由PUBLIC_HTTP_PORT指定，不需憑證；預設只啟動官網與public-api。共用頁面、資料及路由，不新增管理HTTP入口或放寬登入設定；正式預設仍為HTTPS443。HTTP不發HSTS，不跳轉HTTPS。
 - Git追蹤（2026-11-19修正）：public_frontend舊gitlink已移除，必要程式／建置設定以普通檔案納入索引；不恢復子模組。dist/data與dist/assets只留初始化來源，不納入Git。索引暫存不代表已提交或推送；部署前用lab.sh check-web核對程式完整性。
+- 全專案排除規則只放根.gitignore／.dockerignore，不新增子目錄或Dockerfile專用排除檔。三個映像均以專案根目錄為build context，Docker先預設排除全部、逐檔放行必要程式，再由各Dockerfile明確COPY；新增建置依賴須同步根白名單。
 - public_frontend是本專案的普通資料夾，由主Git倉庫管理，不再連接CASINO-web子模組；前後端程式及契約可在同一次提交更新，public-web以獨立容器納入同一Compose，僅打包五個頁面程式檔。固定設定存/data/public/site.json、實體檔存/data/public/assets；兩者由維護工具管理並配對備份，原始快照不能對外提供。型別由scripts/sync_contracts.py生成，不手改；不聲稱工作區修改已提交／部署。正式後端只在根目錄lab_backend，不恢復已刪除的內附backend副本。
 - README只介紹專案，不放測試內容。安全與程式閱讀集中ARCHITECTURE，部署與維護集中OPERATIONS；完整欄位只在DATABASE維護。
 - 允許語法／匯入及暫存目錄／程序內ASGI回歸；不啟動Docker、HTTP listener或部署。不要為精簡刪除保護機制或既有回歸覆蓋。

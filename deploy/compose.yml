@@ -27,7 +27,8 @@ x-api: &api
 services:
   public-web:
     build:
-      context: ../public_frontend
+      context: ..
+      dockerfile: public_frontend/Dockerfile
     image: lab-public-web:demo
     user: "10001:10001"
     read_only: true

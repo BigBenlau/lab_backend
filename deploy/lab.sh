@@ -9,9 +9,18 @@ if [ "${1:-}" = http ]; then
     shift
 fi
 
+check_context() {
+    # 所有映像共用根目錄白名單；缺少時停止，避免把機密或初始化內容送入builder。
+    if [ ! -r "$PROJECT_ROOT/.dockerignore" ] || [ ! -s "$PROJECT_ROOT/.dockerignore" ]; then
+        echo '根目錄 .dockerignore 缺失、空白或不可讀；請同步完整專案建置設定。' >&2
+        return 1
+    fi
+}
+
 check_web() {
     # 在 Docker 前檢查完整官網程式；只讀檔案狀態，不讀初始化資料或機密。
-    for web_file in Dockerfile .dockerignore nginx.conf nginx-https.conf nginx-http.conf \
+    check_context
+    for web_file in Dockerfile nginx.conf nginx-https.conf nginx-http.conf \
         dist/lab.html dist/lab.js dist/api.js dist/lab.css dist/gold.css; do
         if [ ! -r "$PROJECT_ROOT/public_frontend/$web_file" ] || [ ! -s "$PROJECT_ROOT/public_frontend/$web_file" ]; then
             echo "官網建置檔案缺失、空白或不可讀：public_frontend/$web_file" >&2
@@ -23,6 +32,7 @@ check_web() {
 
 check_build() {
     # 未指定服務代表建置全部；只建後端時不要求官網檔案存在。
+    check_context
     web_build=false
     named_service=false
     for build_arg in "$@"; do
@@ -80,7 +90,7 @@ case "${1:-help}" in
         ;;
     help)
         echo '用法：sh deploy/lab.sh build --pull | init | up -d | ps | logs'
-        echo '官網 HTTP：sh deploy/lab.sh http <命令>；80 port，無需憑證，詳見 docs/OPERATIONS.md。'
+        echo '官網 HTTP：sh deploy/lab.sh http <命令>；預設80，.env可設PUBLIC_HTTP_PORT，詳見 docs/OPERATIONS.md。'
         echo '建置前檢查：check-web（只檢查官網程式檔案，不呼叫 Docker）'
         echo '首次內容：seed（預覽）| seed --apply（建立 CSV 與檔案 bundle）'
         echo '維護：cli <命令> | maintenance <命令> | watch'

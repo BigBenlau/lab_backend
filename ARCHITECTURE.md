@@ -45,6 +45,7 @@ SQLite是業務內容唯一執行來源，每次API請求開新快照，只讀�
 
 - init只建空庫；內容經管理頁或明確CSV匯入。根目錄lab.json是真實私人參考，不讀取、複製、提交Git或放進Docker。使用者指定public_frontend/dist/data/lab.json及dist/assets為首次來源，seed僅在明確執行時掛唯讀來源，轉成CSV與公開檔案bundle；原始JSON不入Git，兩者不入映像、不在啟動時讀取。檢查只用合成資料。
 - seed診斷只輸出例外類型、固定錯誤代碼及白名單提示；JSON語法錯誤可附行／欄數，不輸出原始例外、姓名、ID、來源中的實際檔名／路徑或Pydantic輸入。未知錯誤維持泛化；診斷改善不放寬來源驗證、檔案型別或既有輸出不得覆寫的規則。
+- 靜態引用檔以lstat檢查型別及符號連結，讓權限錯誤保留為permission_denied；避免Python3.14的is_file回傳False而將目錄不可進入誤認為缺檔。seed掛載的dist本身及其子目錄須讓UID10001可進入，檔案可讀；不自動更改主機權限。
 - 全部內容儲存即公開，無草稿／發布／封存。固定品牌、介紹及聯絡頁文字由後端維護工具管理public/site.json，公開官網只讀展示；不放people/publications、不作業務內容回退。沒有研究方向、招募、新聞、網站設定API或相關資料表，也沒有UMPASS、瀏覽器上傳或媒體worker。
 - 畢業年月存people.alumniSince，為YYYY-MM或null；僅有至少一項身份且所有isCurrent=false的校友可填，其他必須null。管理API、CSV、恢復及讀取共用模型驗證；不補造日期、自動切換身份或靜默清除日期。成員列表與個人詳情均回傳此欄位。尚未正式部署，SQLite10只初始化新庫，不提供舊庫升級工具。
 - 姓名分姓／名，照片存people.portrait。唯一可寫關聯是authors[].personId；publicationIds在同一快照反查，不雙向重複保存或依同名配對。公開不輸出created/updated或其時間，不暴露操作者。
@@ -79,15 +80,19 @@ flowchart LR
 
 兩API無主機端口。public-api只掛volume的content子目錄唯讀；admin-api掛完整volume到/data、可寫兩庫；gateway不掛DB、不加入公開內容網路，對外IPv4端口由ADMIN_HTTPS_PORT指定（預設27182），容器內固定27182。public-web以獨立Nginx容器使用443（內部8443），僅連public_edge及lab-content，唯讀掛public子目錄，不接觸SQLite或private。四個常駐容器保留非root、唯讀rootfs、cap_drop、no-new-privileges及資源限制；無VPN前提或獨立DB容器。
 
-內容預覽可明確選用deploy/compose.http.yml：官網改為HTTP80（容器8080）、移除TLS掛載，預設僅啟動public-web及public-api。兩種入口共用同一映像、nginx.conf中的路由／安全標頭、資料volume與四個API；僅transport.conf切換監聽和憑證設定，HTTP不發HSTS或跳轉HTTPS。管理端的HTTPS、Session及Origin／CSRF設定不變，API仍不發布主機端口。這是未加密的內容測試入口；正式443與自動續期規劃保留，啟動／切回步驟集中OPERATIONS。
+內容預覽可明確選用deploy/compose.http.yml：官網改為HTTP（主機PUBLIC_HTTP_PORT預設80→容器8080）、移除TLS掛載，預設僅啟動public-web及public-api。端口衝突時由部署者明確選用未佔用端口，不自動終止主機服務或改選端口。兩種入口共用同一映像、nginx.conf中的路由／安全標頭、資料volume與四個API；僅transport.conf切換監聽和憑證設定，HTTP不發HSTS或跳轉HTTPS。管理端的HTTPS、Session及Origin／CSRF設定不變，API仍不發布主機端口。這是未加密的內容測試入口；正式443與自動續期規劃保留，啟動／切回步驟集中OPERATIONS。
 
-public-web以[Docker建置排除規則](https://docs.docker.com/build/concepts/context/#dockerignore-files)先排除所有檔案、只放行lab.html、lab.js、api.js、lab.css、gold.css與設定；首頁映射index.html。Nginx只代理四個GET，清除Cookie／Authorization，其他API、原始JSON及未知靜態路徑回404。網站程式每次換頁重新讀API，失敗顯示重試；不保留靜態模式或快照回退。兩個Nginx的暫存路徑都設在/tmp，符合[非root容器設定](https://github.com/nginx/docker-nginx-unprivileged/blob/main/README.md#troubleshooting-tips)；不落地快取上游回應。實體圖檔／PDF由volume的public/assets提供；固定設定由public/site.json提供，兩者都不進前端映像。
+全專案只維護根目錄.gitignore與.dockerignore，不使用子目錄或Dockerfile專用排除檔。Git排除機密、初始化來源、執行庫／journal、交換檔、備份與開發快取，保留根.env.example及程式／契約。三個映像的build context統一為專案根目錄；[Docker建置白名單](https://docs.docker.com/build/concepts/context/#dockerignore-files)預設排除全部，只放行Python模組、兩支維護腳本、管理三檔、官網五檔及所需建置／Nginx設定，各Dockerfile再只COPY自己的程式。新增依賴檔案須同步根白名單；初始化來源只在seed時唯讀掛載，不經builder。
+
+public-web只複製lab.html、lab.js、api.js、lab.css、gold.css與兩份Nginx設定，首頁映射index.html。Nginx只代理四個GET，清除Cookie／Authorization，其他API、原始JSON及未知靜態路徑回404。網站程式每次換頁重新讀API，失敗顯示重試；不保留靜態模式或快照回退。兩個Nginx的暫存路徑都設在/tmp，符合[非root容器設定](https://github.com/nginx/docker-nginx-unprivileged/blob/main/README.md#troubleshooting-tips)；不落地快取上游回應。實體圖檔／PDF由volume的public/assets提供；固定設定由public/site.json提供，兩者都不進前端映像。
 
 gateway就是Nginx管理入口，提供管理頁靜態檔、HTTPS、合法Host檢查、API反向代理及基本登入限流，不保存內容或實作登入業務。來源IP存取僅由Cloud防火牆／安全組控制，程式不重複管理allow／deny清單；Python仍驗證帳密、Session與權限。
 
 2026-11-17確認全Docker部署、首次空庫；管理員直接經受來源IP限制的HTTPS端口登入，取代SSH通道前提。VPS只需既有Docker／Compose及可用維護控制台，不安裝主機Python或修改systemd；SSH可以不公開，關閉前須確認雲端控制台／救援入口可用。唯一資料volume預設名lab-backend_lab_data，使用local driver；兩庫與journal共用檔案系統，管理和維護一律掛/data。Dockerfile準備空/data權限，顯式init建立資料，不在啟動時自動匯入／重建；刪容器保留volume，刪volume會失去資料。
 
 映像中的自有程式／設定由root擁有，建置時明確設為目錄0755、檔案0644，避免COPY沿用主機0600／0700模式而使UID10001無法讀取；執行時仍非root、rootfs唯讀。這項處理不觸及/data、TLS私鑰或主機bind來源；初始化來源及HTTP設定片段等掛載檔案須另外確保UID10001可讀，不以root執行或chmod 777排錯。
+
+public-web在Dockerfile切換USER後檢查Nginx設定及頁面程式的可讀性，使映像內權限問題在建置時失敗；此檢查不涵蓋運行時的HTTP／TLS／volume掛載。更換設定權限的映像需重建public-web並重建其容器，不能以重建public-api或restart舊容器替代。
 
 tools沿用同一Python映像與非root限制，提供初始化、CSV、備份／恢復及監測。平時為臨時容器，只有明確watch才成為第五個常駐容器；可連兩內網以探測服務，不提供listener、不掛Docker socket。deploy/lab.sh統一Docker命令，沒有主機Python依賴。
 

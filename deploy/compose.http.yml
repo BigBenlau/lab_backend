@@ -3,7 +3,8 @@
 services:
   public-web:
     # 必須取代整份清單，否則 Compose 會額外保留 443 與憑證掛載。
-    ports: !override ["0.0.0.0:80:8080"]
+    # 主機80被既有服務使用時，可只改測試端口；容器及正式HTTPS端口保持固定。
+    ports: !override ["0.0.0.0:${PUBLIC_HTTP_PORT:-80}:8080"]
     volumes: !override
       - type: volume
         source: lab_data

@@ -80,7 +80,7 @@ class GatewaySettingsTests(unittest.TestCase):
 
 
 class DeploymentFilesTests(unittest.TestCase):
-    """用暫存來源及命令替身重現缺Dockerfile；不呼叫真正Docker。"""
+    """用暫存來源及命令替身核對建置邊界；不呼叫真正Docker。"""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='lab deploy ')
@@ -89,6 +89,7 @@ class DeploymentFilesTests(unittest.TestCase):
         (self.root / 'deploy').mkdir()
         self.entry = self.root / 'deploy/lab.sh'
         self.entry.write_text((Path(__file__).resolve().parents[1] / 'deploy/lab.sh').read_text())
+        (self.root / '.dockerignore').write_text('**\n')
         binary = self.root / 'bin'
         binary.mkdir()
         docker = binary / 'docker'
@@ -116,7 +117,7 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
 
     def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
-        for name in ('Dockerfile', '.dockerignore', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
+        for name in ('Dockerfile', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
                      'dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css'):
             path = self.root / 'public_frontend' / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,11 +131,33 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertIn(str(self.root / 'deploy/compose.http.yml'), args)
         self.assertEqual(args[-4:], ['build', '--pull', 'public-api', 'public-web'])
         self.calls.unlink()
-        (self.root / 'public_frontend/.dockerignore').write_text('')
-        result = self.run_command('build', '--pull')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('.dockerignore', result.stderr)
-        self.assertFalse(self.calls.exists())
+        (self.root / '.dockerignore').write_text('')
+        for args in [('build', '--pull'), ('http', 'build', 'public-api')]:
+            result = self.run_command(*args)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('.dockerignore', result.stderr)
+            self.assertFalse(self.calls.exists())
+
+    def test_root_gitignore_protects_data_and_keeps_deployable_code(self):
+        """用真正Git比對合成路徑；不讀私人檔案、不更改本專案索引。"""
+        (self.root / '.gitignore').write_text((Path(__file__).resolve().parents[1] / '.gitignore').read_text())
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True, capture_output=True)
+        private = ['lab.json', 'public_frontend/dist/data/lab.json', 'public_frontend/dist/data/extra.json',
+                   'public_frontend/dist/assets/photo.png', 'public_frontend/dist/assets/papers/example.pdf',
+                   '.env', '.env.local', 'public_frontend/.env', 'public_frontend/.env.example',
+                   'secrets/tls/key.pem', 'elsewhere/key.pem', 'elsewhere/test.key', 'elsewhere/test.p12',
+                   'elsewhere/test.pfx', 'storage/content/content.db', 'copy.db-journal', 'copy.db-mj123',
+                   'copy.sqlite-wal', 'copy.sqlite3-shm', 'copy.csv', 'copy.enc', 'backup.tar.gz',
+                   'backup.zip', 'imports/people.csv', 'exports/data.json', 'backups/manifest.json',
+                   '.venv/bin/python', 'public_frontend/node_modules/example/index.js', '__pycache__/app.pyc']
+        code = ['.env.example', '.gitignore', '.dockerignore', 'deploy/Dockerfile', 'deploy/compose.yml',
+                'public_frontend/Dockerfile', 'public_frontend/nginx-http.conf', 'public_frontend/dist/lab.html',
+                'public_frontend/dist/api.js', 'public_frontend/contracts/public-api.d.ts',
+                'docs/public-openapi.json', 'lab_backend/store.py', 'scripts/prepare_initial_data.py']
+        result = subprocess.run(['git', '-c', 'core.excludesFile=/dev/null', 'check-ignore', '--no-index', '--stdin'],
+                                cwd=self.root, input='\n'.join(private + code) + '\n', text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(result.stdout.splitlines()), set(private))
 
 
 class MaintenanceTests(unittest.TestCase):

@@ -178,12 +178,16 @@ def local_asset(value):
 def checked_file(root, relative):
     """每一層均不得為符號連結；只接受指定根目錄內的普通檔案。"""
     path = root
-    for part in PurePosixPath(relative).parts:
-        path = path / part
-        if path.is_symlink():
-            raise ValueError('不接受符號連結')
-    if not path.is_file():
-        raise ValueError('檔案不存在或不是普通檔案')
+    # Python3.14的is_file／is_symlink會吞掉權限錯誤；lstat保留EACCES供CLI正確分類。
+    try:
+        for part in PurePosixPath(relative).parts:
+            path = path / part
+            if stat.S_ISLNK(path.lstat().st_mode):
+                raise ValueError('不接受符號連結')
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError('檔案不存在或不是普通檔案')
+    except (FileNotFoundError, NotADirectoryError):
+        raise ValueError('檔案不存在或不是普通檔案') from None
     return path
 
 

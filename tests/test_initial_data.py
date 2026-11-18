@@ -1,6 +1,7 @@
 """合成首次來源→CSV→SQLite→公開檔案；不讀真正初始化資料，不啟動服務。"""
 import io
 import json
+import errno
 from pathlib import Path
 import tempfile
 import unittest
@@ -104,6 +105,24 @@ class InitialDataTests(unittest.TestCase):
                 self.assert_failure(code)
                 self.assert_failure(code, apply=True)
                 self.assertFalse(self.output.exists())
+
+    def test_directory_permission_denied_is_not_reported_as_missing_json(self):
+        """模擬容器無法進入dist；不受執行測試帳戶是否為root影響。"""
+        original_lstat = Path.lstat
+        # macOS暫存目錄可能經/var符號連結；prepare會先resolve來源根目錄。
+        denied_paths = {self.source / 'data', self.source.resolve() / 'data'}
+
+        def denied(path):
+            if path in denied_paths:
+                raise PermissionError(errno.EACCES, 'DO_NOT_LOG_PRIVATE', str(path))
+            return original_lstat(path)
+
+        with patch.object(Path, 'lstat', autospec=True, side_effect=denied), \
+                patch('scripts.prepare_initial_data.convert') as convert_source:
+            for apply in (False, True):
+                self.assert_failure('permission_denied', apply=apply)
+                self.assertFalse(self.output.exists())
+            convert_source.assert_not_called()
 
     def test_asset_diagnostics_preserve_rejection_of_unsupported_missing_and_symlink_files(self):
         unexpected = self.source / 'assets/.DS_Store'

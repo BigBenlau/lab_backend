@@ -15,4 +15,6 @@
 
 Compose 已包含 `public-web`，只打包上述五個頁面檔案，不包含設計方案、預覽、資料或圖片。`dist/index.html` 是保留的設計展示頁，不是部署入口。
 
+Git與Docker排除規則統一在專案根目錄的`.gitignore`與`.dockerignore`。官網Dockerfile以整個專案根目錄為建置來源，由根白名單放行所需程式；使用根目錄的`sh deploy/lab.sh`建置。
+
 [API 對接](BACKEND-INTEGRATION.md) · [部署與資料維護](../docs/OPERATIONS.md) · [架構](../ARCHITECTURE.md)

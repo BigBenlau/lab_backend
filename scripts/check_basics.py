@@ -144,7 +144,8 @@ assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' i
 
 # 官網只讀 public 子目錄；API 路徑白名單不得擴張到管理或探測端點。
 web = services['public-web']
-assert web['build'] == {'context': '../public_frontend'}
+assert web['build'] == {'context': '..', 'dockerfile': 'public_frontend/Dockerfile'}
+assert all(service['build']['context'] == '..' for service in services.values())
 subprocess.run(['sh', str(ROOT / 'deploy/lab.sh'), 'check-web'], check=True)
 if (ROOT / '.git').exists():
     # 僅在 Git 工作目錄檢查索引，阻止「本機有檔案、clone 卻只有 gitlink」再次漏檢。
@@ -155,7 +156,7 @@ if (ROOT / '.git').exists():
         mode, _, stage = metadata.split()
         assert stage == '0' and mode != '160000', 'public_frontend仍為gitlink或有未解衝突，不能從Git取得完整官網'
         tracked[path] = mode
-    for name in ('Dockerfile', '.dockerignore', '.gitignore', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
+    for name in ('Dockerfile', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
                  'dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css', 'contracts/public-api.d.ts'):
         assert tracked.get('public_frontend/' + name) in ('100644', '100755'), f'官網必要檔案尚未納入Git索引：{name}'
     assert not any(path.startswith(('public_frontend/dist/data/', 'public_frontend/dist/assets/')) or Path(path).name == 'lab.json'
@@ -200,7 +201,9 @@ assert set(http_override) == {'services'}
 assert set(http_override['services']) == {'public-web', 'admin-api', 'gateway'}
 http_web = http_override['services']['public-web']
 assert set(http_web) == {'ports', 'volumes'}, 'HTTP 必須沿用原映像、內網及權限設定'
-assert isinstance(http_web['ports'], ReplaceList) and http_web['ports'] == ['0.0.0.0:80:8080']
+assert isinstance(http_web['ports'], ReplaceList) and http_web['ports'] == ['0.0.0.0:${PUBLIC_HTTP_PORT:-80}:8080']
+assert 'PUBLIC_HTTP_PORT=80' in (ROOT / '.env.example').read_text().splitlines()
+assert 'PUBLIC_HTTP_PORT' not in (ROOT / 'deploy/compose.yml').read_text(), 'HTTP測試端口不得影響正式HTTPS或管理端'
 assert isinstance(http_web['volumes'], ReplaceList)
 assert http_web['volumes'] == [web['volumes'][0], {
     'type': 'bind', 'source': '../public_frontend/nginx-http.conf', 'target': '/etc/nginx/transport.conf',
@@ -210,20 +213,38 @@ for config in (proxy, nginx):
     for name in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
         assert f'{name}_temp_path /tmp/' in config
     assert 'proxy_max_temp_file_size 0;' in config
-build_ignore = (ROOT / 'public_frontend/.dockerignore').read_text().splitlines()
-assert '**' in build_ignore and not any(line.startswith('!dist/assets') or line.startswith('!dist/data') for line in build_ignore)
-assert build_ignore.index('dist/**') > build_ignore.index('!dist/')
-assert {line for line in build_ignore if line.startswith('!dist/')} == {
-    '!dist/', '!dist/lab.html', '!dist/lab.js', '!dist/api.js', '!dist/lab.css', '!dist/gold.css'}
+# 單一白名單只允許明確程式檔；開放目錄後立即重新排除其內容，防止連帶放行資料。
+build_ignore = [line for line in (ROOT / '.dockerignore').read_text().splitlines() if line and not line.startswith('#')]
+build_dirs = {'lab_backend', 'scripts', 'admin_frontend', 'admin_frontend/admin', 'deploy',
+              'public_frontend', 'public_frontend/dist'}
+build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py',
+               'deploy/Dockerfile', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh',
+               'public_frontend/Dockerfile', 'public_frontend/nginx.conf', 'public_frontend/nginx-https.conf'}
+build_files.update(str(path.relative_to(ROOT)) for path in (ROOT / 'lab_backend').glob('*.py'))
+build_files.update('admin_frontend/admin/' + name for name in ('index.html', 'app.js', 'style.css'))
+build_files.update('public_frontend/dist/' + name for name in ('lab.html', 'lab.js', 'api.js', 'lab.css', 'gold.css'))
+expected_rules = {'**'} | {'!' + path for path in build_files}
+for directory in build_dirs:
+    expected_rules.update({'!' + directory + '/', directory + '/**'})
+    assert build_ignore.index(directory + '/**') == build_ignore.index('!' + directory + '/') + 1
+assert build_ignore[0] == '**' and set(build_ignore) == expected_rules
+assert len(build_ignore) == len(expected_rules), '共用建置白名單不應有重複規則'
+for path in build_files:
+    assert (ROOT / path).is_file()
+    for parent in Path(path).parents:
+        if str(parent) != '.':
+            assert build_ignore.index('!' + path) > build_ignore.index(str(parent) + '/**')
+for directory in ('public_frontend', 'deploy', 'admin_frontend', 'lab_backend', 'scripts'):
+    assert not (ROOT / directory / '.gitignore').exists(), 'Git排除規則統一放在根目錄'
+    assert not list((ROOT / directory).glob('*.dockerignore')), '不能以子目錄或Dockerfile專用規則覆蓋根白名單'
 public_docker = (ROOT / 'public_frontend/Dockerfile').read_text()
-assert 'COPY nginx-https.conf /etc/nginx/transport.conf' in public_docker
-assert '!nginx-https.conf' in build_ignore
-assert 'COPY dist/ ' not in public_docker and 'COPY . ' not in public_docker
-assert 'lab.json' not in public_docker and 'COPY dist/assets' not in public_docker
+# 官網映像只COPY七個指定檔案，不能順便取得共用context中的管理頁或Python程式。
+public_sources = {source for line in public_docker.splitlines() if line.startswith('COPY ') for source in line.split()[1:-1]}
+assert public_sources == {path for path in build_files if path.startswith('public_frontend/') and not path.endswith('/Dockerfile')}
+assert 'COPY public_frontend/nginx-https.conf /etc/nginx/transport.conf' in public_docker
 for source in (ROOT / 'scripts').glob('*.py'):
     ast.parse(source.read_text(), filename=str(source))
 assert 'lab.json' not in (ROOT / 'deploy/Dockerfile').read_text()
-assert 'lab.json' in (ROOT / '.dockerignore').read_text().splitlines()
 
 subprocess.run(['node', '--check', str(ROOT / 'admin_frontend/admin/app.js')], check=True)
 for source in (ROOT / 'public_frontend/dist').glob('*.js'):

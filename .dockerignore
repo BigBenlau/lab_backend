@@ -1,33 +1,50 @@
-.git
-.venv
-**/__pycache__
-*.egg-info
-.env*
-storage
-secrets
-backups
-**/*.db*
-# 公開前端雖與後端共用Git倉庫，仍獨立建置；後端及管理映像不包含它。
-public_frontend
+# 三個映像共用專案根目錄context與本白名單；各Dockerfile只COPY自身所需檔案。
+# 預設排除全部：Git、機密、初始化data/assets、執行庫、備份及開發資料均不傳給builder。
+**
 
-# 真實參考資料與離線交換檔不得送進建置context。
-lab.json
-imports
-exports
-**/*.csv
-**/*.enc
-**/*.zip
-**/*.tar*
+# Python API與離線維護；開目錄後重新排除內容，再逐一放行必要檔案。
+!requirements.lock
+!lab_backend/
+lab_backend/**
+!lab_backend/__init__.py
+!lab_backend/application.py
+!lab_backend/auth.py
+!lab_backend/cli.py
+!lab_backend/config.py
+!lab_backend/content.py
+!lab_backend/models.py
+!lab_backend/public.py
+!lab_backend/store.py
+!scripts/
+scripts/**
+!scripts/maintenance.py
+!scripts/prepare_initial_data.py
 
-# 部署只使用程式、鎖定依賴及靜態管理頁；開發資料不送入建置context。
-docs
-tests
-README.md
-AGENTS.md
-ARCHITECTURE.md
-pyproject.toml
-requirements-dev.lock
-scripts/check_basics.py
-scripts/sync_contracts.py
-**/.DS_Store
-**/*.pyc
+# 管理頁與Nginx入口設定。
+!admin_frontend/
+admin_frontend/**
+!admin_frontend/admin/
+admin_frontend/admin/**
+!admin_frontend/admin/index.html
+!admin_frontend/admin/app.js
+!admin_frontend/admin/style.css
+!deploy/
+deploy/**
+!deploy/Dockerfile
+!deploy/Dockerfile.gateway
+!deploy/nginx.conf.template
+!deploy/gateway-entrypoint.sh
+
+# 官網只需五個頁面檔案；HTTP片段在運行時掛載，不加入映像。
+!public_frontend/
+public_frontend/**
+!public_frontend/Dockerfile
+!public_frontend/nginx.conf
+!public_frontend/nginx-https.conf
+!public_frontend/dist/
+public_frontend/dist/**
+!public_frontend/dist/lab.html
+!public_frontend/dist/lab.js
+!public_frontend/dist/api.js
+!public_frontend/dist/lab.css
+!public_frontend/dist/gold.css

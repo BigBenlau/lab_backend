@@ -75,7 +75,7 @@ def failure_details(exc):
     if isinstance(exc, (TypeError, AttributeError)):
         return 'source_shape_invalid', '來源的物件、陣列或欄位型別不符合首次匯入格式。'
     if isinstance(exc, PermissionError):
-        return 'permission_denied', '確認UID10001可讀初始化來源、可寫/data/private；不要使用chmod 777。'
+        return 'permission_denied', '確認UID10001可讀來源檔案、可進入dist及data/assets各層目錄，並可寫/data/private；只看JSON的644不足以確認可讀，不要使用chmod 777。'
     if isinstance(exc, FileExistsError):
         return 'output_exists', SAFE_FAILURES['輸出已存在'][1]
     if isinstance(exc, OSError):
