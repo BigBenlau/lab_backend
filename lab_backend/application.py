@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from urllib.parse import urlsplit
 
 from .config import Config
 from .models import ApiError
@@ -44,7 +43,8 @@ class Boundary:
             """前置拒絕沿用安全標頭，不進入業務路由。"""
             await JSONResponse({'detail': detail}, status_code=status)(scope, receive, secured)
         if self.admin and scope['method'] not in ('GET', 'HEAD', 'OPTIONS'):
-            if headers.get(b'origin', b'').decode('latin1') != self.config.admin_origin:
+            if not self.config.accepts_origin(headers.get(b'origin', b'').decode('latin1'),
+                                              headers.get(b'host', b'').decode('latin1')):
                 return await reject(403, 'Origin 驗證失敗')
         if self.admin and scope['path'].startswith('/api/'):
             request = Request(scope)
@@ -85,7 +85,7 @@ class Boundary:
 
 def create_app(admin=False):
     """建立指定入口的路由；此步驟不開 socket，也不初始化資料。"""
-    config = Config.load(admin=admin)
+    config = Config.load()
     store = Store(config.storage, public=not admin)
 
     @asynccontextmanager
@@ -158,9 +158,9 @@ def create_app(admin=False):
         from . import auth, content
         for router in (auth.router, auth.admin_router, content.router):
             app.include_router(router)
-        host = urlsplit(config.admin_origin).hostname
-        app.add_middleware(TrustedHostMiddleware, allowed_hosts=[host, '127.0.0.1', 'localhost'])
         if config.dev:
+            # 只保留本機開發邊界；Docker入口允許任意實際IP／域名。
+            app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
             app.mount('/', StaticFiles(directory=Path(__file__).resolve().parent.parent / 'admin_frontend/admin', html=True))
     else:
         from .public import router
@@ -182,7 +182,7 @@ def create_app(admin=False):
                     operation.setdefault('parameters', []).extend({
                         'name': name, 'in': 'header', 'required': True,
                         'schema': {'type': 'string'},
-                        'description': '須與 LAB_ADMIN_ORIGIN 完全相符' if name == 'Origin' else '取自登入或 session 回應的 csrf',
+                        'description': '須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http' if name == 'Origin' else '取自登入或 session 回應的 csrf',
                     } for name in names)
     return app
 

@@ -18,12 +18,14 @@ check_context() {
 }
 
 check_web() {
-    # 在 Docker 前檢查完整官網程式；只讀檔案狀態，不讀初始化資料或機密。
+    # 共用gateway建置前檢查頁面與設定；只讀檔案狀態，不讀初始化資料。
     check_context
-    for web_file in Dockerfile nginx.conf nginx-https.conf nginx-http.conf \
-        dist/lab.html dist/lab.js dist/api.js dist/lab.css dist/gold.css; do
-        if [ ! -r "$PROJECT_ROOT/public_frontend/$web_file" ] || [ ! -s "$PROJECT_ROOT/public_frontend/$web_file" ]; then
-            echo "官網建置檔案缺失、空白或不可讀：public_frontend/$web_file" >&2
+    for web_file in deploy/Dockerfile.gateway deploy/nginx.conf.template deploy/gateway-entrypoint.sh \
+        admin_frontend/admin/index.html admin_frontend/admin/app.js admin_frontend/admin/style.css \
+        public_frontend/dist/lab.html public_frontend/dist/lab.js public_frontend/dist/api.js \
+        public_frontend/dist/lab.css public_frontend/dist/gold.css; do
+        if [ ! -r "$PROJECT_ROOT/$web_file" ] || [ ! -s "$PROJECT_ROOT/$web_file" ]; then
+            echo "入口建置檔案缺失、空白或不可讀：$web_file" >&2
             echo '請同步完整 public_frontend 程式；若從 Git 取得，確認它已由舊 gitlink 轉為一般檔案。詳見 docs/OPERATIONS.md。' >&2
             return 1
         fi
@@ -37,8 +39,8 @@ check_build() {
     named_service=false
     for build_arg in "$@"; do
         case "$build_arg" in
-            public-web) web_build=true; named_service=true ;;
-            public-api|admin-api|gateway|tools) named_service=true ;;
+            gateway) web_build=true; named_service=true ;;
+            public-api|admin-api|tools) named_service=true ;;
         esac
     done
     if [ "$web_build" = true ] || [ "$named_service" = false ]; then
@@ -47,11 +49,11 @@ check_build() {
 }
 
 compose() {
-    # 固定設定檔位置，不用 source 執行 .env 內容。
+    # 固定已使用的專案名稱／volume；不讀取.env，避免舊Host或端口繼續影響部署。
     if [ "$LAB_HTTP_MODE" = true ]; then
         set -- -f "$PROJECT_ROOT/deploy/compose.http.yml" "$@"
     fi
-    docker compose --env-file "$PROJECT_ROOT/.env" -f "$PROJECT_ROOT/deploy/compose.yml" "$@"
+    docker compose --project-name lab-backend --env-file /dev/null -f "$PROJECT_ROOT/deploy/compose.yml" "$@"
 }
 
 case "${1:-help}" in
@@ -88,9 +90,19 @@ case "${1:-help}" in
         # 可選監測容器；不掛 Docker socket，也不需要主機排程。
         compose --profile maintenance up -d --no-deps tools
         ;;
+    admin-info)
+        # 僅列實際映射、監聽與登入模式，不列整份環境或帳戶資料。
+        compose ps gateway admin-api
+        compose exec -T gateway sh -c '
+            printf "gateway_http_test=%s\n" "$LAB_HTTP_TEST"
+            cat /tmp/admin-transport.conf
+        '
+        compose exec -T admin-api python -c 'from lab_backend.config import Config; c = Config.load(); print("api_http_test=" + str(c.http_test)); print("origin_scheme=" + ("https" if c.secure_cookie else "http")); print("session_cookie=" + c.session_cookie)'
+        ;;
     help)
         echo '用法：sh deploy/lab.sh build --pull | init | up -d | ps | logs'
         echo 'HTTP 測試：sh deploy/lab.sh http <命令>；官網預設80，管理預設27181，詳見 docs/OPERATIONS.md。'
+        echo '管理入口核對：admin-info（只列執行中的端口、模式與Cookie名稱；不需要.env）'
         echo '建置前檢查：check-web（只檢查官網程式檔案，不呼叫 Docker）'
         echo '首次內容：seed（預覽）| seed --apply（建立 CSV 與檔案 bundle）'
         echo '維護：cli <命令> | maintenance <命令> | watch'

@@ -1,9 +1,17 @@
 FROM nginx:1.30.6-alpine
 COPY admin_frontend/admin /srv/admin
+COPY public_frontend/dist/lab.html /srv/code/index.html
+COPY public_frontend/dist/lab.js public_frontend/dist/api.js public_frontend/dist/lab.css public_frontend/dist/gold.css /srv/code/
 COPY deploy/nginx.conf.template /etc/lab/nginx.conf.template
 COPY deploy/gateway-entrypoint.sh /etc/lab/entrypoint.sh
 # 程式與設定保留root擁有、讓執行帳戶可讀；腳本由/bin/sh讀取，不需執行位元。
-RUN find /srv/admin /etc/lab -type d -exec chmod 0755 {} + \
-    && find /srv/admin /etc/lab -type f -exec chmod 0644 {} +
+RUN chmod 0755 /srv /etc/nginx \
+    && find /srv/admin /srv/code /etc/lab -type d -exec chmod 0755 {} + \
+    && find /srv/admin /srv/code /etc/lab -type f -exec chmod 0644 {} +
 USER 10001:10001
+# 提早發現映像內權限錯誤；不讀初始化來源或運行中的volume／憑證。
+RUN test -x /etc/nginx && test -x /srv/code && test -x /srv/admin && test -x /etc/lab \
+    && for file in /etc/nginx/mime.types /etc/lab/* /srv/code/* /srv/admin/*; do \
+         test -r "$file" || exit 1; \
+       done
 ENTRYPOINT ["/bin/sh", "/etc/lab/entrypoint.sh"]

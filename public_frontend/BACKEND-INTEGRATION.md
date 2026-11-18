@@ -13,7 +13,7 @@
 
 啟動先讀 `/data/site.json`：固定品牌、介紹與聯絡頁內容，不包含 people/publications。首頁全部合照仍從 home API 取得。此檔由初始化工具的白名單生成，正式來源是 volume 的 `/data/public/site.json`；與圖片一起備份。沒有新增設定／新聞 API。
 
-`public-web` 由 [nginx.conf](nginx.conf) 提供 HTTPS 443，代理四個 GET 至 Docker 內網 `lab-public-api:8000`。它只掛載 volume 的 `public` 子目錄唯讀，不掛 SQLite 或 private，不加入管理網路；原始初始化 JSON、CSV、備份及其他路徑不能透過此入口取得。
+共用`gateway`由[nginx.conf.template](../deploy/nginx.conf.template)的公開listener提供HTTPS443，代理四個GET至Docker內網lab-public-api:8000。只掛volume的public子目錄唯讀，不掛SQLite或private；公開端口不能取得管理頁或管理API。兩API仍分別連獨立內網，gateway是共用入口；原始JSON、CSV及備份不會公開。
 
 內容測試可使用 `sh deploy/lab.sh http ...`，官網入口改為 HTTP 80，無需憑證。此模式共用全部頁面、同源 API 與檔案路徑，前端不需要切換 API 網址或增加 HTTP 專用程式碼；啟動步驟見部署手冊。
 

@@ -1,37 +1,27 @@
 #!/bin/sh
 set -eu
 
-invalid() {
-    # 設定錯誤一律停止，不輸出設定值。
-    echo 'Invalid gateway settings: check ADMIN_HOST, mode and selected admin port' >&2
-    exit 1
+# 只有兩種固定部署模式；主機映射及此處listener由基本檢查一起核對。
+case "${LAB_HTTP_TEST:-false}" in
+    false) admin_port=27182; PUBLIC_LISTEN_PORT=8443; tls_suffix=' ssl' ;;
+    true) admin_port=27181; PUBLIC_LISTEN_PORT=8080; tls_suffix='' ;;
+    *) echo 'LAB_HTTP_TEST must be true or false' >&2; exit 1 ;;
+esac
+
+write_transport() {
+    # 路徑及端口皆為固定值；HTTP完全不生成憑證指令。
+    printf 'listen %s%s default_server;\n' "$2" "$tls_suffix" > "$1"
+    if [ "${LAB_HTTP_TEST:-false}" = false ]; then
+        printf 'ssl_certificate %s/cert.pem;\nssl_certificate_key %s/key.pem;\n' "$3" "$3" >> "$1"
+        printf 'ssl_protocols TLSv1.2 TLSv1.3;\nssl_session_tickets off;\n' >> "$1"
+    fi
 }
 
-# 對外端口與 Compose Origin 共用設定；443 留給獨立官網。
-case "${ADMIN_HOST:-}" in ''|*[!a-z0-9.-]*) invalid;; esac
-case "${LAB_HTTP_TEST:-false}" in
-    false) admin_port=${ADMIN_HTTPS_PORT:-27182} ;;
-    true) admin_port=${ADMIN_HTTP_PORT:-27181} ;;
-    *) invalid ;;
-esac
-case "$admin_port" in ''|0*|*[!0-9]*) invalid;; esac
-[ "${#admin_port}" -le 5 ] || invalid
-[ "$admin_port" -ge 1024 ] && [ "$admin_port" -le 65535 ] || invalid
-
 umask 077
-# 只生成固定指令，使用者不能注入 Nginx 設定；兩模式共用其餘路由與限制。
-if [ "${LAB_HTTP_TEST:-false}" = true ]; then
-    echo 'listen 27182 default_server;' > /tmp/transport.conf
-else
-    cat > /tmp/transport.conf <<'TLS'
-listen 27182 ssl default_server;
-ssl_certificate /run/tls/cert.pem;
-ssl_certificate_key /run/tls/key.pem;
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_session_tickets off;
-TLS
-fi
-# 僅替換部署變數，不替換 Nginx 的 $host 等變數；先檢查，再開 listener。
-envsubst '${ADMIN_HOST}' < /etc/lab/nginx.conf.template > /tmp/nginx.conf
+write_transport /tmp/public-transport.conf "$PUBLIC_LISTEN_PORT" /run/public-tls
+write_transport /tmp/admin-transport.conf "$admin_port" /run/tls
+export PUBLIC_LISTEN_PORT
+# 僅替換由模式決定的公開端口，不展開Nginx的$host、$uri等變數。
+envsubst '${PUBLIC_LISTEN_PORT}' < /etc/lab/nginx.conf.template > /tmp/nginx.conf
 nginx -t -c /tmp/nginx.conf
 exec nginx -c /tmp/nginx.conf -g 'daemon off;'

@@ -25,37 +25,6 @@ x-api: &api
     options: {max-size: "10m", max-file: "3"}
 
 services:
-  public-web:
-    build:
-      context: ..
-      dockerfile: public_frontend/Dockerfile
-    image: lab-public-web:demo
-    user: "10001:10001"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    restart: unless-stopped
-    pids_limit: 50
-    mem_limit: 128m
-    cpus: 0.5
-    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"]
-    ports: ["0.0.0.0:443:8443"]
-    networks: [public_edge, frontend_net]
-    volumes:
-      - type: volume
-        source: lab_data
-        target: /srv/public
-        read_only: true
-        volume: {subpath: public, nocopy: true}
-      - type: bind
-        source: ../secrets/public-tls
-        target: /run/tls
-        read_only: true
-        bind: {create_host_path: false}
-    logging:
-      driver: json-file
-      options: {max-size: "10m", max-file: "3"}
-
   public-api:
     <<: *api
     environment:
@@ -76,7 +45,6 @@ services:
     command: ["python", "-m", "uvicorn", "lab_backend.application:admin_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-proxy-headers", "--no-access-log", "--limit-concurrency", "8"]
     environment:
       LAB_STORAGE: /data
-      LAB_ADMIN_ORIGIN: https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}
       LAB_DEV: "false"
       LAB_HTTP_TEST: "false"
     networks: [admin_net]
@@ -96,22 +64,32 @@ services:
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
     pids_limit: 50
-    mem_limit: 128m
-    cpus: 0.5
+    mem_limit: 256m
+    cpus: 1.0
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"]
     environment:
-      ADMIN_HOST: ${ADMIN_HOST:?Set admin hostname}
-      ADMIN_HTTPS_PORT: ${ADMIN_HTTPS_PORT:-27182}
       LAB_HTTP_TEST: "false"
     ports:
       # 啟動前在 Cloud 防火牆限制管理來源；程式不再維護 IP 清單。
       # 明確限 IPv4，避免新增未配置雲端防火牆的 IPv6 入口。
-      - "0.0.0.0:${ADMIN_HTTPS_PORT:-27182}:27182"
-    networks: [admin_edge, admin_net]
+      - "0.0.0.0:443:8443"
+      - "0.0.0.0:27182:27182"
+    # Nginx共用，但公開與管理API不互相加入對方網路。
+    networks: [edge, frontend_net, admin_net]
     volumes:
+      - type: volume
+        source: lab_data
+        target: /srv/public
+        read_only: true
+        volume: {subpath: public, nocopy: true}
       - type: bind
         source: ../secrets/tls
         target: /run/tls
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ../secrets/public-tls
+        target: /run/public-tls
         read_only: true
         bind: {create_host_path: false}
     logging:
@@ -126,7 +104,6 @@ services:
     command: ["python", "scripts/maintenance.py", "monitor", "--interval", "60"]
     environment:
       LAB_STORAGE: /data
-      LAB_ADMIN_ORIGIN: https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}
     networks: [frontend_net, admin_net]
     volumes:
       - type: volume
@@ -140,11 +117,10 @@ volumes:
     driver: local
 
 networks:
-  public_edge: {}
+  edge: {}
   # 公開前端的伺服器容器加入此網路；API 不發布宿主機 port。
   frontend_net:
-    name: ${LAB_CONTENT_NETWORK:-lab-content}
+    name: lab-content
     internal: true
-  admin_edge: {}
   admin_net:
     internal: true

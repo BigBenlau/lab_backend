@@ -61,59 +61,49 @@ SQLite是業務內容唯一執行來源，每次API請求開新快照，只讀�
 
 ```mermaid
 flowchart LR
-  B[公開瀏覽器] -->|HTTPS 443| F[public-web Nginx]
-  F -->|lab-content| P[public-api]
-  F -->|唯讀public子目錄| S[assets及site.json]
-  T[tools離線維護] -->|寫入／備份| S
-  P -->|唯讀| C[(content.db)]
-  A[管理瀏覽器] -->|HTTPS 27182 預設| W[Cloud防火牆 來源IP限制]
-  W --> G[gateway HTTPS／管理頁]
-  G -->|admin_net| M[admin-api]
+  B[公開瀏覽器] -->|HTTPS 443／測試HTTP 80| G[gateway 共用Nginx]
+  A[管理瀏覽器] -->|HTTPS 27182／測試HTTP 27181| W[Cloud來源IP限制]
+  W --> G
+  G -->|四個GET／frontend_net| P[public-api]
+  G -->|登入及管理／admin_net| M[admin-api]
+  G -->|唯讀public子目錄| S[assets及site.json]
+  T[tools按需維護] -->|寫入與配對備份| S
+  P -->|唯讀content子目錄| C[(content.db)]
   M -->|讀寫| C
   M -->|讀寫| D[(admin.db)]
-  subgraph V[Docker named volume：lab_data]
+  subgraph V[Docker named volume：lab-backend_lab_data]
     C
     D
     S
   end
 ```
 
-兩API無主機端口。public-api只掛volume的content子目錄唯讀；admin-api掛完整volume到/data、可寫兩庫；gateway不掛DB、不加入公開內容網路，對外IPv4端口由ADMIN_HTTPS_PORT指定（預設27182），容器內固定27182。public-web以獨立Nginx容器使用443（內部8443），僅連public_edge及lab-content，唯讀掛public子目錄，不接觸SQLite或private。四個常駐容器保留非root、唯讀rootfs、cap_drop、no-new-privileges及資源限制；無VPN前提或獨立DB容器。
+三個常駐容器、兩個映像：gateway提供兩個前端及代理，public-api與admin-api共用Python映像但分開運行。兩API無主機端口，只監聽容器8000；public-api只連frontend_net、唯讀掛content子目錄，admin-api只連admin_net、掛完整volume到/data且可寫兩庫。gateway連兩內網，但只唯讀掛public子目錄，不能讀SQLite或private；tools按需維護或watch成為第四個常駐容器，不開listener、不掛Docker socket。
 
-測試可明確選用deploy/compose.http.yml：官網HTTP為PUBLIC_HTTP_PORT預設80→8080，管理HTTP為ADMIN_HTTP_PORT預設27181→27182，兩入口都取代正式端口及TLS掛載，不需憑證，四個常駐服務均可啟動。兩模式共用頁面、路由、資料volume及API，不複製管理業務。Nginx只切換transport.conf中的監聽／TLS指令，HTTP不發HSTS、不跳轉HTTPS；gateway測試片段由entrypoint生成固定指令，正式仍為原TLS設定。端口衝突由部署者明確處理，不自動停止其他服務。
+公開及管理入口使用不同listener與靜態根目錄：公開只代理固定四個GET到public-api，清除Cookie／Authorization、隱藏Set-Cookie，其他API及未知檔案路徑404；管理只代理auth/admin到admin-api，保留Cookie與CSRF。不能以公開端口、更換Host或改URL繞到管理路由。兩套請求限流、body限制及CSP各自保留，標頭不因Nginx的server繼承而互相污染。共用入口是明確的部署取捨：Nginx程序及兩份TLS私鑰的故障／入侵影響面合併，入口重啟同時影響官網與管理頁；兩個API的程序、網路及資料權限隔離仍保留，不能宣稱與兩個獨立Nginx完全等同。
 
-HTTP管理模式須由覆蓋檔明確設定LAB_HTTP_TEST=true及精確http Origin；ADMIN_HOST可為實際測試IPv4或域名。使用獨立lab_session_http_test Cookie、不設Secure，保留HttpOnly、SameSite=Strict、帳密、Origin／CSRF、帳戶狀態與登入限流；LAB_DEV仍僅限loopback且不可與HTTP測試同開。正式Compose明確設LAB_HTTP_TEST=false，使用HTTPS Origin與__Host-lab_session Secure Cookie，設定或切換後重建服務、重新登入。HTTP不加密密碼及Cookie，只供受Cloud來源限制的受控測試；兩API仍不發布主機端口。啟動及切回步驟集中OPERATIONS。
+不依賴.env、ADMIN_HOST或LAB_ADMIN_ORIGIN。lab.sh固定Compose專案名lab-backend並以--env-file /dev/null忽略舊.env，volume名與使用者現有部署相同，公開網路固定lab-content。HTTP明確用lab.sh http，其他命令預設HTTPS；不自動選端口或終止主機服務。HTTP映射80→8080與27181→27181；HTTPS映射443→8443與27182→27182。官網容器端口避開特權端口，管理端口內外相同；模式、Compose映射與Nginx生成片段由檢查共同核對。
 
-全專案只維護根目錄.gitignore與.dockerignore，不使用子目錄或Dockerfile專用排除檔。Git排除機密、初始化來源、執行庫／journal、交換檔、備份與開發快取，保留根.env.example及程式／契約。三個映像的build context統一為專案根目錄；[Docker建置白名單](https://docs.docker.com/build/concepts/context/#dockerignore-files)預設排除全部，只放行Python模組、兩支維護腳本、管理三檔、官網五檔及所需建置／Nginx設定，各Dockerfile再只COPY自己的程式。新增依賴檔案須同步根白名單；初始化來源只在seed時唯讀掛載，不經builder。
+管理入口取消固定Host白名單，可用實際IPv4或域名訪問，不再因ADMIN_HOST不符直接關閉連線。帳密與來源限制仍有效：每個非GET請求的Origin須等於部署模式的協定加實際Host（包含端口），拒絕缺少Origin、跨域、錯協定或錯端口；不信任X-Forwarded-Host／Proto或任意客戶端轉發IP。除登入外，寫入另需Session內的CSRF token。這是同源驗證，不是預先核准域名；任何解析至VPS的域名可打開登入頁，來源存取由Cloud控制，HTTPS瀏覽器仍須驗證憑證域名。
 
-public-web只複製lab.html、lab.js、api.js、lab.css、gold.css與兩份Nginx設定，首頁映射index.html。Nginx只代理四個GET，清除Cookie／Authorization，其他API、原始JSON及未知靜態路徑回404。網站程式每次換頁重新讀API，失敗顯示重試；不保留靜態模式或快照回退。兩個Nginx的暫存路徑都設在/tmp，符合[非root容器設定](https://github.com/nginx/docker-nginx-unprivileged/blob/main/README.md#troubleshooting-tips)；不落地快取上游回應。實體圖檔／PDF由volume的public/assets提供；固定設定由public/site.json提供，兩者都不進前端映像。
+HTTP模式由Compose設定LAB_HTTP_TEST=true，使用lab_session_http_test、不設Secure，保留HttpOnly、SameSite=Strict、8小時Session、Argon2、每次帳戶狀態檢查及登入限流。正式模式明確false，使用__Host-lab_session與Secure，Origin必須https；模式錯拼拒絕啟動。LAB_DEV僅作loopback開發，不與HTTP測試同開。HTTP不加密帳密或Cookie，只供受控測試；HTTP不發HSTS、不跳轉HTTPS。切換模式／重啟後需重新登入。
 
-gateway就是Nginx管理入口，提供管理頁靜態檔、HTTPS、合法Host檢查、API反向代理及基本登入限流，不保存內容或實作登入業務。來源IP存取僅由Cloud防火牆／安全組控制，程式不重複管理allow／deny清單；Python仍驗證帳密、Session與權限。
+public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或恢復後門。停用／改密碼撤銷Session，兩個密碼運算併發額度及公開欄位白名單保留。身分檢查先於body解析，JSON拒絕未知欄位、重複鍵及非有限數字；管理body上限256KiB。UI隱藏不能代替後端授權，完整防爆破及正式安全驗收仍待完成。
 
-2026-11-17確認全Docker部署、首次空庫；管理員直接經受來源IP限制的HTTPS端口登入，取代SSH通道前提。VPS只需既有Docker／Compose及可用維護控制台，不安裝主機Python或修改systemd；SSH可以不公開，關閉前須確認雲端控制台／救援入口可用。唯一資料volume預設名lab-backend_lab_data，使用local driver；兩庫與journal共用檔案系統，管理和維護一律掛/data。Dockerfile準備空/data權限，顯式init建立資料，不在啟動時自動匯入／重建；刪容器保留volume，刪volume會失去資料。
+所有容器非root、唯讀rootfs、cap_drop=ALL、no-new-privileges並限制資源。gateway只在/tmp存設定與暫存，映像內自有程式／設定root擁有、目錄0755與檔案0644，切換USER10001後檢查可讀性；不改主機來源、TLS或volume權限。不以root執行或chmod777排錯。gateway建置只複製管理三檔、官網五檔及部署設定，不帶來源JSON、assets或私人資料；固定site.json及實體圖檔／PDF來自volume。
 
-映像中的自有程式／設定由root擁有，建置時明確設為目錄0755、檔案0644，避免COPY沿用主機0600／0700模式而使UID10001無法讀取；執行時仍非root、rootfs唯讀。這項處理不觸及/data、TLS私鑰或主機bind來源；初始化來源及HTTP設定片段等掛載檔案須另外確保UID10001可讀，不以root執行或chmod 777排錯。
+全專案只維護根.gitignore與.dockerignore。兩個映像共用根context、預設排除全部再逐檔放行程式，新增建置依賴須同步白名單。原始來源只在seed時唯讀掛載，不經builder；舊.env仍忽略且不自動刪除。沒有獨立DB容器，不在啟動時自動初始化或重建；不刪volume或journal排錯。單台Linux本機檔案系統，VPS只需Docker／Compose與可用維護控制台，不安裝主機Python或systemd排程；SSH關閉前須確認救援入口。
 
-public-web在Dockerfile切換USER後檢查Nginx設定及頁面程式的可讀性，使映像內權限問題在建置時失敗；此檢查不涵蓋運行時的HTTP／TLS／volume掛載。更換設定權限的映像需重建public-web並重建其容器，不能以重建public-api或restart舊容器替代。
+來源IP僅由Cloud防火牆／安全組管理，程式無IP清單。部署前限制管理端口、確認規則套用實際VPS／網卡；非標準端口不能取代登入或防火牆。僅IPv4直接連VPS，不經CDN或額外代理、不配置AAAA；驗證允許與不允許的來源，不能只看UFW。
 
-tools沿用同一Python映像與非root限制，提供初始化、CSV、備份／恢復及監測。平時為臨時容器，只有明確watch才成為第五個常駐容器；可連兩內網以探測服務，不提供listener、不掛Docker socket。deploy/lab.sh統一Docker命令，沒有主機Python依賴。
+HTTPS保留官網443與管理27182，主機secrets/public-tls與secrets/tls分別唯讀掛到gateway的/run/public-tls與/run/tls；完整憑證鏈及私鑰須配對、SAN符合瀏覽器域名。共用Nginx需要兩份TLS都正確才可啟動／reload。憑證、Cookie、執行庫／journal、匯出與備份不能進Git、映像或日誌。正式自動續期仍未實作：獨立ACME容器以DNS驗證，機密不給API或gateway、不掛Docker socket；配對檢查、成組發布、gateway載入及實際握手均成功才算完成，失敗保留有效版本並告警。詳見[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)。
 
-Cloud DNS負責網域指向VPS，ADMIN_HOST則指定應用接受的管理主機名，不能從任意請求Host推導可信Origin。ADMIN_HOST與ADMIN_HTTPS_PORT共同生成管理Origin；對外端口限定1024–65535，預設27182，443保留給官網。HTTPS憑證以目錄唯讀掛載，SAN須符合主機名；網域／端口先檢查合法性，再nginx -t後啟動。
+DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 
-正式憑證方案採獨立ACME容器透過DNS API驗證，排程留在Docker內；DNS密鑰及ACME帳戶不掛給API或Nginx，不使用Docker socket或主機cron。續期需包含簽發、配對驗證及成組發布、Nginx容器內重新載入與線上憑證核對，失敗保留有效版本並告警。這套自動化尚未實作到Compose，不能把手動申請成功當成自動續期已啟用；example.org的AliDNS操作與待完成項目集中在[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)。HTTPS保護瀏覽器至Nginx的傳輸，不替代權限或資料庫加密。
-
-啟動gateway前須在Cloud安全組限制管理端口來源，且確認規則綁定實際VPS／網卡。程式已取消ADMIN_ALLOW_CIDRS，不偵測／代設雲端規則，也沒有本機IP篩選作為補救；Cloud若放行所有來源，登入頁就會對其可達。非標準端口不能阻止完整端口掃描，也不代替來源限制或登入保護。
-
-目前只支援IPv4直接連VPS，不經CDN／額外代理，gateway以TCP來源限流，不信任客戶端轉發標頭。部署須核對真實來源，並從允許／不允許的外部網路驗證Cloud限制，不能只看UFW設定。來源IP不是個人身份，亦不取代帳密、Secure Cookie、Origin／CSRF。首次部署與設定更新步驟集中OPERATIONS，本次準備不等於已在伺服器部署。
-
-public匿名唯讀、admin登入可寫，使用Argon2，無MD5、預設帳密、匿名註冊或恢復後門。保留HttpOnly／SameSite／HTTPS Secure Cookie、八小時記憶體Session、Origin／CSRF、每次帳戶狀態／角色檢查、停用／改密碼撤銷Session、兩個密碼運算併發額度及公開欄位白名單。身分檢查先於body解析，JSON拒絕未知欄位、重複鍵與非有限數字；body上限256KiB。UI隱藏不能取代後端授權。
-
-憑證、Cookie、執行庫／journal、私人參考、匯出與備份不得進版控、映像或日誌。DB備份加密；靜態備份包含assets與白名單site.json，以版本、DB指紋及逐檔SHA256配對，拒絕穿越／符號連結並限制大小，恢復只建立新目錄。這是完整性核對，不是數位簽章。外部資產只列未驗證，不連外下載。公開檔案只接受SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝以新目錄切換且拒絕覆寫。CSV提交與檔案安裝是分開步驟，須離線完成全部檢查才啟動官網；不能宣稱跨DB與檔案的原子提交。目錄更換後重建public-web，使volume.subpath重新掛載。
-
-/healthz只看程序，/readyz讀內容，兩者不經官網代理。tools經固定內網端點監測磁碟、備份失敗／過期／錯配及持續不可用，不使用外部HTTP代理。單次執行以JSON、stderr及退出碼告警；watch在容器內每60秒採樣，無主機排程。volume內備份仍須匯出異地保存；外部通知、自動備份與整機停止監測需另行配置。完整防爆破及正式安全驗收尚未完成。
+/healthz只看程序，/readyz讀內容，皆不經外部代理。tools從固定內網端點監測磁碟、備份失敗／過期／錯配及持續不可用，不依賴公開Host或外部HTTP代理。watch每60秒採樣，無主機排程；同volume備份仍須匯出異地。外部通知、自動備份、TLS自動化及整機停止監測另行配置。操作步驟集中OPERATIONS，狀態只記已執行的檢查。
 
 ## 交付邊界
 
-public_frontend作為本專案普通資料夾，與後端一起提交；Compose使用獨立public-web容器。2026-11-19修正殘留gitlink，必要程式、Dockerfile、Nginx設定與目前契約已以普通檔案納入主Git索引；索引暫存不代表已提交或推送。dist/data及dist/assets不加入Git，初始化來源另行受控提供。lab.sh在建置官網前檢查必要檔案，check_basics亦檢查Git索引，避免只有本機有檔案而部署副本缺失。已刪除的內附backend副本不恢復，正式後端只在根目錄lab_backend。設計預覽及舊來源契約只供本機參考，部署白名單不包含它們。路由數量、包裝、五表及欄位沒有改動；契約若變更，仍須同步文件、OpenAPI、管理頁與生成型別。舊庫／備份不隱式遷移、覆寫或刪除。
+public_frontend作為本專案普通資料夾，與後端一起提交；兩個前端由同一gateway提供。2026-11-19修正殘留gitlink，必要程式與目前契約以普通檔案納入主倉庫，部署設定集中deploy；索引暫存不代表已提交或推送。dist/data及dist/assets不加入Git，初始化來源另行受控提供。lab.sh在建置官網前檢查必要檔案，check_basics亦檢查Git索引，避免只有本機有檔案而部署副本缺失。已刪除的內附backend副本不恢復，正式後端只在根目錄lab_backend。設計預覽及舊來源契約只供本機參考，部署白名單不包含它們。路由數量、包裝、五表及欄位沒有改動；契約若變更，仍須同步文件、OpenAPI、管理頁與生成型別。舊庫／備份不隱式遷移、覆寫或刪除。
 
 本階段只允許語法／匯入、暫存目錄及程序內ASGI局部回歸；不啟動Docker、HTTP listener或部署。正式瀏覽器、安全、負載與故障恢復驗收延後，狀態只記實際執行結果。

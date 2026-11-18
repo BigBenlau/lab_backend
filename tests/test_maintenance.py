@@ -43,7 +43,6 @@ class GatewaySettingsTests(unittest.TestCase):
             path.write_text('#!/bin/sh\n' + body + '\n')
             path.chmod(0o700)
         self.env = {**os.environ, 'PATH': str(self.root) + os.pathsep + os.environ['PATH'],
-                    'ADMIN_HOST': 'admin.example', 'ADMIN_HTTPS_PORT': '27182',
                     'LAB_HTTP_TEST': 'false',
                     'GATEWAY_CALLS': str(self.root / 'calls')}
 
@@ -53,44 +52,40 @@ class GatewaySettingsTests(unittest.TestCase):
         return subprocess.run(['sh', str(self.entry)], env={**self.env, **changes},
                               text=True, capture_output=True, timeout=5)
 
-    def test_default_and_custom_port_without_local_ip_rules(self):
-        """預設及自訂端口均可啟動；來源IP由Cloud管理，不要求本機清單。"""
-        for port in ('', '27182', '31827'):
-            with self.subTest(port=port):
-                result = self.run_entry(ADMIN_HTTPS_PORT=port)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertFalse((self.root / 'admin-allowlist.conf').exists())
-                calls = (self.root / 'calls').read_text().splitlines()
-                self.assertEqual(len(calls), 2)
-                self.assertTrue(calls[0].startswith('-t -c '))
-                self.assertTrue(calls[1].endswith('-g daemon off;'))
-                transport = (self.root / 'transport.conf').read_text()
-                self.assertIn('listen 27182 ssl default_server;', transport)
-                self.assertIn('ssl_certificate /run/tls/cert.pem;', transport)
-                self.assertIn('ssl_certificate_key /run/tls/key.pem;', transport)
-                self.assertIn('ssl_protocols TLSv1.2 TLSv1.3;', transport)
+    def test_fixed_https_ports_and_separate_certificate_paths(self):
+        """共用Nginx的兩個TLS listener仍使用各自憑證，先檢查再啟動。"""
+        result = self.run_entry()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / 'calls').read_text().splitlines()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0].startswith('-t -c '))
+        self.assertTrue(calls[1].endswith('-g daemon off;'))
+        for name, port, tls_path in (('admin', 27182, '/run/tls'), ('public', 8443, '/run/public-tls')):
+            transport = (self.root / f'{name}-transport.conf').read_text()
+            self.assertIn(f'listen {port} ssl default_server;', transport)
+            self.assertIn(f'ssl_certificate {tls_path}/cert.pem;', transport)
+            self.assertIn(f'ssl_certificate_key {tls_path}/key.pem;', transport)
+            self.assertIn('ssl_protocols TLSv1.2 TLSv1.3;', transport)
 
     def test_http_needs_no_certificate_and_switching_back_restores_tls(self):
-        """顯式 HTTP 共用路由但不載入憑證；切回正式模式必須重新產生 TLS 設定。"""
-        for port in ('', '27181', '31827'):
-            result = self.run_entry(LAB_HTTP_TEST='true', ADMIN_HOST='192.0.2.10', ADMIN_HTTP_PORT=port)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.root / 'transport.conf').read_text(), 'listen 27182 default_server;\n')
+        """HTTP移除兩組憑證，管理端內外27181一致；切回後恢復TLS。"""
+        result = self.run_entry(LAB_HTTP_TEST='true')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name, port in (('admin', 27181), ('public', 8080)):
+            self.assertEqual((self.root / f'{name}-transport.conf').read_text(), f'listen {port} default_server;\n')
         self.assertEqual(self.run_entry().returncode, 0)
-        self.assertIn('ssl_certificate ', (self.root / 'transport.conf').read_text())
-        for port in ('80', '0', '027181', '65536', '27181;'):
-            self.assertNotEqual(self.run_entry(LAB_HTTP_TEST='true', ADMIN_HTTP_PORT=port).returncode, 0)
-            self.assertFalse((self.root / 'calls').exists())
+        self.assertIn('ssl_certificate ', (self.root / 'admin-transport.conf').read_text())
+        self.assertIn('ssl_certificate ', (self.root / 'public-transport.conf').read_text())
 
-    def test_bad_settings_never_start_nginx(self):
-        """維持端口範圍與Host設定注入檢查；不把雲端規則混入程式設定。"""
-        cases = [('ADMIN_HTTPS_PORT', value) for value in ('443', '0', '027182', '65536', '-1', '27182;')]
-        cases += [('ADMIN_HOST', value) for value in ('', 'https://admin.example', 'admin.example; include /tmp/other;')]
-        cases += [('LAB_HTTP_TEST', value) for value in ('TRUE', '1', 'http;')]
-        for key, value in cases:
-            with self.subTest(key=key, value=value):
-                self.assertNotEqual(self.run_entry(**{key: value}).returncode, 0)
-                self.assertFalse((self.root / 'calls').exists())
+    def test_legacy_host_and_ports_are_ignored_but_invalid_mode_stops_nginx(self):
+        """已移除的設定不能改變固定listener或注入Nginx；模式錯拼仍拒絕。"""
+        result = self.run_entry(LAB_HTTP_TEST='true', ADMIN_HOST='bad; include /other;',
+                                ADMIN_HTTP_PORT='80', PUBLIC_HTTP_PORT='27181')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'admin-transport.conf').read_text(), 'listen 27181 default_server;\n')
+        for mode in ('TRUE', '1', 'http;'):
+            self.assertNotEqual(self.run_entry(LAB_HTTP_TEST=mode).returncode, 0)
+            self.assertFalse((self.root / 'calls').exists())
 
     def test_nginx_check_failure_stops_startup(self):
         """TLS／Nginx設定檢查失敗時不能繼續開管理入口。"""
@@ -109,6 +104,8 @@ class DeploymentFilesTests(unittest.TestCase):
         self.entry = self.root / 'deploy/lab.sh'
         self.entry.write_text((Path(__file__).resolve().parents[1] / 'deploy/lab.sh').read_text())
         (self.root / '.dockerignore').write_text('**\n')
+        # 舊.env不可被執行或傳給Compose。
+        (self.root / '.env').write_text('ADMIN_HOST=unused\nCOMPOSE_PROJECT_NAME=wrong-volume\n')
         binary = self.root / 'bin'
         binary.mkdir()
         docker = binary / 'docker'
@@ -124,10 +121,10 @@ class DeploymentFilesTests(unittest.TestCase):
                               capture_output=True, text=True, timeout=5)
 
     def test_missing_dockerfile_stops_before_docker(self):
-        for args in [('http', 'build', '--pull', 'public-api', 'public-web'), ('build', '--pull')]:
+        for args in [('http', 'build', '--pull', 'public-api', 'gateway'), ('build', '--pull')]:
             result = self.run_command(*args)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn('public_frontend/Dockerfile', result.stderr)
+            self.assertIn('deploy/Dockerfile.gateway', result.stderr)
             self.assertFalse(self.calls.exists())
 
     def test_backend_build_does_not_require_frontend(self):
@@ -136,19 +133,23 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
 
     def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
-        for name in ('Dockerfile', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
-                     'dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css'):
-            path = self.root / 'public_frontend' / name
+        for name in ('deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh',
+                     'admin_frontend/admin/index.html', 'admin_frontend/admin/app.js', 'admin_frontend/admin/style.css',
+                     'public_frontend/dist/lab.html', 'public_frontend/dist/lab.js', 'public_frontend/dist/api.js',
+                     'public_frontend/dist/lab.css', 'public_frontend/dist/gold.css'):
+            path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('# synthetic source\n')
         result = self.run_command('check-web')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.calls.exists())
-        result = self.run_command('http', 'build', '--pull', 'public-api', 'public-web')
+        result = self.run_command('http', 'build', '--pull', 'public-api', 'gateway')
         self.assertEqual(result.returncode, 0, result.stderr)
         args = self.calls.read_text().splitlines()
         self.assertIn(str(self.root / 'deploy/compose.http.yml'), args)
-        self.assertEqual(args[-4:], ['build', '--pull', 'public-api', 'public-web'])
+        self.assertEqual(args[args.index('--env-file') + 1], '/dev/null')
+        self.assertEqual(args[args.index('--project-name') + 1], 'lab-backend')
+        self.assertEqual(args[-4:], ['build', '--pull', 'public-api', 'gateway'])
         self.calls.unlink()
         (self.root / '.dockerignore').write_text('')
         for args in [('build', '--pull'), ('http', 'build', 'public-api')]:
@@ -163,14 +164,14 @@ class DeploymentFilesTests(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True, capture_output=True)
         private = ['lab.json', 'public_frontend/dist/data/lab.json', 'public_frontend/dist/data/extra.json',
                    'public_frontend/dist/assets/photo.png', 'public_frontend/dist/assets/papers/example.pdf',
-                   '.env', '.env.local', 'public_frontend/.env', 'public_frontend/.env.example',
+                   '.env', '.env.example', '.env.local', 'public_frontend/.env', 'public_frontend/.env.example',
                    'secrets/tls/key.pem', 'elsewhere/key.pem', 'elsewhere/test.key', 'elsewhere/test.p12',
                    'elsewhere/test.pfx', 'storage/content/content.db', 'copy.db-journal', 'copy.db-mj123',
                    'copy.sqlite-wal', 'copy.sqlite3-shm', 'copy.csv', 'copy.enc', 'backup.tar.gz',
                    'backup.zip', 'imports/people.csv', 'exports/data.json', 'backups/manifest.json',
                    '.venv/bin/python', 'public_frontend/node_modules/example/index.js', '__pycache__/app.pyc']
-        code = ['.env.example', '.gitignore', '.dockerignore', 'deploy/Dockerfile', 'deploy/compose.yml',
-                'public_frontend/Dockerfile', 'public_frontend/nginx-http.conf', 'public_frontend/dist/lab.html',
+        code = ['.gitignore', '.dockerignore', 'deploy/Dockerfile', 'deploy/compose.yml',
+                'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'public_frontend/dist/lab.html',
                 'public_frontend/dist/api.js', 'public_frontend/contracts/public-api.d.ts',
                 'docs/public-openapi.json', 'lab_backend/store.py', 'scripts/prepare_initial_data.py']
         result = subprocess.run(['git', '-c', 'core.excludesFile=/dev/null', 'check-ignore', '--no-index', '--stdin'],
@@ -239,7 +240,7 @@ class MaintenanceTests(unittest.TestCase):
                     self.assertEqual((await helpers.request(app, '/readyz'))[0], 503)
             self.assertNotIn('/readyz', app.openapi()['paths'])
             self.assertNotIn('/healthz', app.openapi()['paths'])
-        with patch.dict(os.environ, {'LAB_STORAGE': str(self.store.root), 'LAB_DEV': 'true', 'LAB_ADMIN_ORIGIN': 'http://127.0.0.1'}):
+        with patch.dict(os.environ, {'LAB_STORAGE': str(self.store.root), 'LAB_DEV': 'true'}):
             asyncio.run(run())
 
     def test_offline_file_check_missing_external_and_symlink(self):
@@ -255,26 +256,26 @@ class MaintenanceTests(unittest.TestCase):
         (self.web / 'assets/papers/missing.pdf').symlink_to(self.web / 'assets/logo.svg')
         self.assertFalse(check_files(self.store, self.web)['ok'])
 
-    def test_container_probe_uses_internal_targets_and_admin_host(self):
-        """不開socket：核對管理Host、禁止外部proxy及503／連線失敗的分別。"""
+    def test_container_probe_uses_internal_targets_without_public_host(self):
+        """不開socket：不依賴公開Host，禁止外部proxy並區分503／連線失敗。"""
         with patch('scripts.maintenance.urllib.request.build_opener') as build, \
                 patch('scripts.maintenance.urllib.request.ProxyHandler') as proxy:
             opener = build.return_value
             opener.open.return_value.__enter__.return_value.status = 200
-            self.assertEqual(container_probe('admin-api', 'readyz', 'https://admin.example:27182'), 200)
+            self.assertEqual(container_probe('admin-api', 'readyz'), 200)
             request = opener.open.call_args.args[0]
             self.assertEqual(request.full_url, 'http://admin-api:8000/readyz')
-            self.assertEqual(request.get_header('Host'), 'admin.example:27182')
+            self.assertIsNone(request.get_header('Host'))
             self.assertIsNone(request.get_header('Cookie'))
             proxy.assert_called_with({})
             error = urllib.error.HTTPError('http://public-api:8000/readyz', 503, 'unavailable', {}, None)
             opener.open.side_effect = error
-            self.assertEqual(container_probe('public-api', 'readyz', ''), 503)
+            self.assertEqual(container_probe('public-api', 'readyz'), 503)
             self.assertIsNone(opener.open.call_args.args[0].get_header('Host'))
             opener.open.side_effect = urllib.error.URLError('unavailable')
-            self.assertEqual(container_probe('public-api', 'healthz', ''), 0)
+            self.assertEqual(container_probe('public-api', 'healthz'), 0)
             with self.assertRaises(ValueError):
-                container_probe('external.example', 'readyz', '')
+                container_probe('external.example', 'readyz')
 
     def test_monitor_interval_continues_after_alert(self):
         """常駐監測告警後仍採樣；單次命令保留退出碼供操作者判讀。"""

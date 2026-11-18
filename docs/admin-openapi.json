@@ -161,7 +161,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           }
         ]
       }
@@ -446,7 +446,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",
@@ -613,7 +613,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",
@@ -915,7 +915,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",
@@ -957,7 +957,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",
@@ -1737,7 +1737,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",
@@ -1930,7 +1930,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",
@@ -2131,7 +2131,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "須與 LAB_ADMIN_ORIGIN 完全相符"
+            "description": "須與請求 Host（含端口）同源；正式用 https，HTTP測試用 http"
           },
           {
             "name": "X-CSRF-Token",

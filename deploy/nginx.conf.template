@@ -10,46 +10,91 @@ http {
     access_log /dev/stdout minimal;
     client_body_temp_path /tmp/client;
     proxy_temp_path /tmp/proxy;
-    # 即使未使用 FastCGI 等上游，模組初始化也不能寫唯讀的 /var/cache。
+    # 共用程序仍維持非root、唯讀rootfs，只在/tmp存暫存檔。
     fastcgi_temp_path /tmp/fastcgi;
     uwsgi_temp_path /tmp/uwsgi;
     scgi_temp_path /tmp/scgi;
     proxy_max_temp_file_size 0;
-    client_max_body_size 256k;
     client_body_timeout 10s;
     client_header_timeout 10s;
-    send_timeout 15s;
     keepalive_timeout 20s;
+    send_timeout 15s;
+    limit_req_zone $binary_remote_addr zone=public_api:1m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=admin_rate:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=login_rate:1m rate=6r/m;
     limit_req_status 429;
     proxy_connect_timeout 3s;
-    proxy_read_timeout 20s;
-    proxy_send_timeout 20s;
     proxy_cache off;
     resolver 127.0.0.11 valid=10s ipv6=off;
-    proxy_set_header Host $http_host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For "";
-    proxy_set_header X-Forwarded-Proto "";
-    proxy_set_header Connection "";
-    proxy_http_version 1.1;
-    # HTTP 測試不能令瀏覽器記住強制 HTTPS；正式 HTTPS 的 HSTS 保持不變。
     map $scheme $hsts { https "max-age=31536000"; default ""; }
+    # 官網相簿需要行內CSS，管理頁不需要；按listener選擇，不信任請求Host。
+    map $server_port $content_security_policy {
+        default "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+        ${PUBLIC_LISTEN_PORT} "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+    }
     add_header Strict-Transport-Security $hsts always;
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
     add_header Cache-Control no-store always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
+    add_header Content-Security-Policy $content_security_policy always;
+
+    # 公開入口只代理四個GET，不能根據客戶端路徑或Host選擇管理上游。
+    map $uri $public_path {
+        default "";
+        /api/home /api/v1/public/home;
+        /api/people /api/v1/public/people;
+        /api/publications /api/v1/public/publications;
+        "~^/api/people/(?<person_id>[a-zA-Z0-9][a-zA-Z0-9_-]{0,199})$" /api/v1/public/people/$person_id;
+    }
+    server {
+        include /tmp/public-transport.conf;
+        server_name _;
+        root /srv/code;
+        disable_symlinks on;
+        autoindex off;
+        client_max_body_size 1k;
+        proxy_read_timeout 15s;
+        proxy_send_timeout 15s;
+        # 標頭在各server完整宣告，避免Nginx的繼承規則讓公開規則洩漏至管理入口。
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_hide_header Set-Cookie;
+        location /api/ {
+            if ($public_path = "") { return 404; }
+            if ($request_method != GET) { return 405; }
+            limit_req zone=public_api burst=20 nodelay;
+            set $lab_backend lab-public-api:8000;
+            proxy_pass http://$lab_backend$public_path$is_args$args;
+        }
+        location = / { try_files /index.html =404; }
+        location ~ ^/(index\.html|lab\.html)$ { try_files /index.html =404; }
+        location ~ ^/(lab\.js|api\.js|lab\.css|gold\.css)$ { try_files $uri =404; }
+        location = /data/site.json { alias /srv/public/site.json; }
+        location ~* ^/assets/.+\.(svg|png|jpe?g|webp|pdf)$ {
+            root /srv/public;
+            try_files $uri =404;
+        }
+        location / { return 404; }
+    }
 
     server {
-        include /tmp/transport.conf;
-        server_name ${ADMIN_HOST};
-        if ($host != "${ADMIN_HOST}") { return 444; }
-        # IP 存取由 Cloud 防火牆控制；此處保留合法 Host、TLS 與登入限流。
+        include /tmp/admin-transport.conf;
+        # 以獨立端口分流，可用實際IP或域名；帳密與同源驗證仍由API執行。
+        server_name _;
+        client_max_body_size 256k;
+        proxy_read_timeout 20s;
+        proxy_send_timeout 20s;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header Connection "";
+        proxy_http_version 1.1;
         set $admin_upstream admin-api:8000;
-        # 可連線仍須帳密／Session，API 逐次檢查權限。
         location = /api/v1/auth/login {
             limit_req zone=login_rate burst=3 nodelay;
             proxy_pass http://$admin_upstream;
@@ -58,7 +103,7 @@ http {
             limit_req zone=admin_rate burst=20 nodelay;
             proxy_pass http://$admin_upstream;
         }
-        # 不把公開 API、healthz 或其他未知 API 前綴代理到管理服務。
+        # 不代理公開API或內部探測；管理靜態檔與官網根目錄分開。
         location /api/ { return 404; }
         location / {
             root /srv/admin;

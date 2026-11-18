@@ -357,13 +357,12 @@ def restore_static(archive_path, database_backup, target, apply=False):
     return {'version': manifest['version'], 'files': len(manifest['files']), 'applied': apply}
 
 
-def container_probe(service, endpoint, admin_origin):
+def container_probe(service, endpoint):
     """維護容器直連固定內網端點；不用主機 Python、Docker CLI 或 socket。"""
     if service not in ('public-api', 'admin-api') or endpoint not in ('healthz', 'readyz'):
         raise ValueError('不支援的監測端點')
-    # 管理服務會驗證 Host；僅送設定的公開主機名，不送登入 Cookie。
-    headers = {'Host': urllib.parse.urlsplit(admin_origin).netloc} if service == 'admin-api' else {}
-    request = urllib.request.Request(f'http://{service}:8000/{endpoint}', headers=headers)
+    # 固定內網GET探測不需要公開域名、登入Cookie或Origin。
+    request = urllib.request.Request(f'http://{service}:8000/{endpoint}')
     try:
         # 禁止沿用 HTTP_PROXY，避免把內部探測送到外部代理。
         with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
@@ -456,7 +455,7 @@ def main():
                 raise ValueError('監測門檻須為正數，間隔不可為負數')
             while True:
                 # 告警不能終止後續採樣；一次性呼叫則仍以退出碼回報失敗。
-                result = monitor(store, lambda service, endpoint: container_probe(service, endpoint, config.admin_origin),
+                result = monitor(store, container_probe,
                                  args.min_free_mib * 1024 * 1024, args.max_backup_hours, args.threshold)
                 print(json.dumps(result, ensure_ascii=False), flush=True)
                 if not args.interval:

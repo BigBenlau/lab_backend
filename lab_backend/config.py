@@ -8,7 +8,6 @@ import os
 @dataclass(frozen=True)
 class Config:
     storage: Path
-    admin_origin: str
     dev: bool
     http_test: bool = False
 
@@ -24,23 +23,31 @@ class Config:
             return 'lab_session_http_test'
         return 'lab_session_dev' if self.dev else '__Host-lab_session'
 
+    def accepts_origin(self, origin: str, host: str):
+        """取消固定主機白名單，仍比對同源；協定取部署模式，不信任轉發標頭。"""
+        scheme = 'https' if self.secure_cookie else 'http'
+        if not host or any(c.isspace() or c in '/\\@?#' for c in host):
+            return False
+        try:
+            parsed = urlsplit(f'{scheme}://{host}')
+            # 讀取port也驗證數字及範圍，拒絕格式不合法的authority。
+            port = parsed.port
+        except ValueError:
+            return False
+        if not parsed.hostname or (port is not None and port == 0):
+            return False
+        if self.dev and parsed.hostname not in ('localhost', '127.0.0.1'):
+            return False
+        return origin == f'{scheme}://{host}'
+
     @classmethod
-    def load(cls, admin: bool = False):
-        """預設強制 HTTPS；遠端 HTTP 測試須單獨開啟，不擴張 LAB_DEV。"""
+    def load(cls):
+        """預設HTTPS；HTTP測試與本機開發必須明確選擇，不再讀固定Host／Origin。"""
         dev = os.getenv('LAB_DEV', 'false') == 'true'
         test_mode = os.getenv('LAB_HTTP_TEST', 'false')
         if test_mode not in ('true', 'false'):
             raise ValueError('LAB_HTTP_TEST 只接受 true 或 false')
         http_test = test_mode == 'true'
-        origin = os.getenv('LAB_ADMIN_ORIGIN', '')
-        if admin:
-            parsed = urlsplit(origin)
-            if parsed.path or parsed.query or parsed.fragment or parsed.username or not parsed.hostname:
-                raise ValueError('LAB_ADMIN_ORIGIN 需為精確 origin，不含路徑')
-            if http_test and (dev or parsed.scheme != 'http'):
-                raise ValueError('HTTP 測試需 http Origin，且不可同時開啟 LAB_DEV')
-            if parsed.scheme != 'https' and not (parsed.scheme == 'http' and (http_test or dev)):
-                raise ValueError('正式管理入口必須 HTTPS')
-            if dev and parsed.hostname not in ('localhost', '127.0.0.1'):
-                raise ValueError('LAB_DEV 只允許 loopback 開發入口')
-        return cls(Path(os.getenv('LAB_STORAGE', 'storage')).resolve(), origin, dev, http_test)
+        if dev and http_test:
+            raise ValueError('HTTP測試不可同時開啟LAB_DEV')
+        return cls(Path(os.getenv('LAB_STORAGE', 'storage')).resolve(), dev, http_test)

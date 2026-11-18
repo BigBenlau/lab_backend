@@ -98,13 +98,13 @@ for resource in ALL_MODELS:
 
 compose = yaml.safe_load((ROOT / 'deploy/compose.yml').read_text())
 services = compose['services']
-assert set(services) == {'public-web', 'gateway', 'public-api', 'admin-api', 'tools'}
+assert set(services) == {'gateway', 'public-api', 'admin-api', 'tools'}
 for name, service in services.items():
     assert service['read_only'] and service['cap_drop'] == ['ALL']
     assert service['user'] == '10001:10001'
     for mount in service['tmpfs']:
         assert mount.startswith('/tmp:') and 'size=' in mount and 'nosuid' in mount
-    if name not in ('gateway', 'public-web'):
+    if name != 'gateway':
         assert not service.get('ports')
 public_mounts = services['public-api']['volumes']
 assert {v['target'] for v in public_mounts} == {'/data/content'}
@@ -123,35 +123,41 @@ assert services['admin-api']['command'].count('1') == 1
 assert services['admin-api']['environment']['LAB_DEV'] == 'false'
 assert services['admin-api']['environment']['LAB_HTTP_TEST'] == 'false'
 assert not set(services['public-api']['networks']) & set(services['admin-api']['networks'])
-assert not set(services['public-api']['networks']) & set(services['gateway']['networks'])
-assert services['gateway']['ports'] == ['0.0.0.0:${ADMIN_HTTPS_PORT:-27182}:27182']
-assert services['admin-api']['environment']['LAB_ADMIN_ORIGIN'] == services['tools']['environment']['LAB_ADMIN_ORIGIN'] == 'https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}'
+assert set(services['public-api']['networks']) == {'frontend_net'}
+assert set(services['admin-api']['networks']) == {'admin_net'}
+assert set(services['gateway']['networks']) == {'edge', 'frontend_net', 'admin_net'}
+assert services['gateway']['ports'] == ['0.0.0.0:443:8443', '0.0.0.0:27182:27182']
+assert 'LAB_ADMIN_ORIGIN' not in str(services) and 'ADMIN_HOST' not in str(services)
 assert not services['gateway'].get('depends_on')
 assert compose['networks']['frontend_net']['internal'] is True
 assert services['public-api']['networks']['frontend_net']['aliases'] == ['lab-public-api']
 nginx = (ROOT / 'deploy/nginx.conf.template').read_text()
-assert '8443' not in nginx and '/api/v1/public/' not in nginx
+# 分別核對兩個server，公開入口不能因共用程序而取得管理路由或靜態檔。
+common, proxy, admin_proxy = nginx.split('    server {')
+assert 'admin-api' not in common + proxy and '/srv/admin' not in proxy
+assert 'lab-public-api' not in admin_proxy and '/srv/public' not in admin_proxy
+assert 'include /tmp/public-transport.conf;' in proxy
+assert 'include /tmp/admin-transport.conf;' in admin_proxy
 assert 'resolver 127.0.0.11' in nginx and 'proxy_pass http://$admin_upstream' in nginx
 assert 'X-Real-IP $remote_addr' in nginx
-assert 'include /tmp/transport.conf;' in nginx
 assert 'map $scheme $hsts { https "max-age=31536000"; default ""; }' in nginx
 assert 'add_header Strict-Transport-Security $hsts always;' in nginx
-assert 'server_name ${ADMIN_HOST};' in nginx and 'if ($host != "${ADMIN_HOST}")' in nginx
+assert 'server_name _;' in admin_proxy
+assert 'ADMIN_HOST' not in nginx and 'return 444' not in nginx and 'return 421' not in nginx
 assert 'set_real_ip_from' not in nginx and 'real_ip_header' not in nginx
 assert not re.search(r'^\s*(allow|deny|satisfy)\s', nginx, re.M), '來源 IP 僅由 Cloud 防火牆管理'
 assert 'admin-allowlist' not in nginx and 'limit_req zone=login_rate' in nginx
 assert 'location ~ ^/api/v1/(auth|admin)/' in nginx and 'location /api/ { return 404; }' in nginx
-assert set(services['gateway']['environment']) == {'ADMIN_HOST', 'ADMIN_HTTPS_PORT', 'LAB_HTTP_TEST'}
+assert services['gateway']['environment'] == {'LAB_HTTP_TEST': 'false'}
 assert services['gateway']['environment']['LAB_HTTP_TEST'] == 'false'
 entrypoint = (ROOT / 'deploy/gateway-entrypoint.sh').read_text()
 assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' in entrypoint
-assert 'listen 27182 ssl default_server;' in entrypoint
-assert 'ssl_certificate /run/tls/cert.pem;' in entrypoint
-assert 'ssl_certificate_key /run/tls/key.pem;' in entrypoint
+assert 'write_transport /tmp/admin-transport.conf "$admin_port" /run/tls' in entrypoint
+assert 'write_transport /tmp/public-transport.conf "$PUBLIC_LISTEN_PORT" /run/public-tls' in entrypoint
 
 # 官網只讀 public 子目錄；API 路徑白名單不得擴張到管理或探測端點。
-web = services['public-web']
-assert web['build'] == {'context': '..', 'dockerfile': 'public_frontend/Dockerfile'}
+web = services['gateway']
+assert web['build'] == {'context': '..', 'dockerfile': 'deploy/Dockerfile.gateway'}
 assert all(service['build']['context'] == '..' for service in services.values())
 subprocess.run(['sh', str(ROOT / 'deploy/lab.sh'), 'check-web'], check=True)
 if (ROOT / '.git').exists():
@@ -163,36 +169,32 @@ if (ROOT / '.git').exists():
         mode, _, stage = metadata.split()
         assert stage == '0' and mode != '160000', 'public_frontend仍為gitlink或有未解衝突，不能從Git取得完整官網'
         tracked[path] = mode
-    for name in ('Dockerfile', 'nginx.conf', 'nginx-https.conf', 'nginx-http.conf',
-                 'dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css', 'contracts/public-api.d.ts'):
+    for name in ('dist/lab.html', 'dist/lab.js', 'dist/api.js', 'dist/lab.css', 'dist/gold.css', 'contracts/public-api.d.ts'):
         assert tracked.get('public_frontend/' + name) in ('100644', '100755'), f'官網必要檔案尚未納入Git索引：{name}'
     assert not any(path.startswith(('public_frontend/dist/data/', 'public_frontend/dist/assets/')) or Path(path).name == 'lab.json'
                    for path in tracked), '初始化內容不得納入官網程式版本'
-assert set(web['networks']) == {'public_edge', 'frontend_net'}
-assert web['ports'] == ['0.0.0.0:443:8443']
 assert web['volumes'][0] == {'type': 'volume', 'source': 'lab_data', 'target': '/srv/public',
                              'read_only': True, 'volume': {'subpath': 'public', 'nocopy': True}}
 assert all(v['read_only'] for v in web['volumes'])
-proxy = (ROOT / 'public_frontend/nginx.conf').read_text()
 for key in ('home', 'people', 'publications'):
-    assert f'/api/{key} /api/v1/public/{key};' in proxy
+    assert f'/api/{key} /api/v1/public/{key};' in common
 assert '/api/v1/admin/' not in proxy and '/api/v1/auth/' not in proxy
 assert '/api/schemaVersion' not in proxy and '/api/lab' not in proxy and '/api/assets' not in proxy
-assert '/api/v1/public/people/$person_id;' in proxy
+assert '/api/v1/public/people/$person_id;' in common
 assert 'if ($public_path = "") { return 404; }' in proxy
-assert 'if ($request_method != GET)' in proxy and 'proxy_cache off;' in proxy
+assert 'if ($request_method != GET)' in proxy and 'proxy_cache off;' in common
 assert 'location = /data/site.json { alias /srv/public/site.json; }' in proxy
 assert 'disable_symlinks on;' in proxy and 'location / { return 404; }' in proxy
 assert 'set_real_ip_from' not in proxy and 'real_ip_header' not in proxy
-assert 'include /etc/nginx/transport.conf;' in proxy
-assert 'map $scheme $hsts' in proxy and 'add_header Strict-Transport-Security $hsts always;' in proxy
-https_transport = (ROOT / 'public_frontend/nginx-https.conf').read_text()
-http_transport = (ROOT / 'public_frontend/nginx-http.conf').read_text()
-assert 'listen 8443 ssl default_server;' in https_transport
-assert 'ssl_certificate /run/tls/cert.pem;' in https_transport
-assert 'ssl_certificate_key /run/tls/key.pem;' in https_transport
-assert 'listen 8080 default_server;' in http_transport
-assert not re.search(r'\b(ssl|ssl_certificate|return|add_header)\b', http_transport)
+assert 'proxy_set_header Cookie "";' in proxy and 'proxy_set_header Authorization "";' in proxy
+assert 'proxy_hide_header Set-Cookie;' in proxy
+assert 'proxy_set_header Cookie' not in admin_proxy and 'proxy_hide_header Set-Cookie' not in admin_proxy
+assert 'proxy_set_header Host $http_host;' in admin_proxy
+assert '${PUBLIC_LISTEN_PORT} "default-src' in common
+assert 'client_max_body_size 1k;' in proxy and 'client_max_body_size 256k;' in admin_proxy
+assert web['volumes'][1:] == [
+    {'type': 'bind', 'source': '../secrets/tls', 'target': '/run/tls', 'read_only': True, 'bind': {'create_host_path': False}},
+    {'type': 'bind', 'source': '../secrets/public-tls', 'target': '/run/public-tls', 'read_only': True, 'bind': {'create_host_path': False}}]
 
 # 保留 !override 標記來檢查取代語意，不以普通清單假裝 Compose 已合併成功。
 # 真實 Compose 合併、Nginx 解析與端口可達性仍須在部署環境驗證。
@@ -205,28 +207,19 @@ class ComposeLoader(yaml.SafeLoader):
 ComposeLoader.add_constructor('!override', lambda loader, node: ReplaceList(loader.construct_sequence(node, deep=True)))
 http_override = yaml.load((ROOT / 'deploy/compose.http.yml').read_text(), Loader=ComposeLoader)
 assert set(http_override) == {'services'}
-assert set(http_override['services']) == {'public-web', 'admin-api', 'gateway', 'tools'}
-http_web = http_override['services']['public-web']
-assert set(http_web) == {'ports', 'volumes'}, 'HTTP 必須沿用原映像、內網及權限設定'
-assert isinstance(http_web['ports'], ReplaceList) and http_web['ports'] == ['0.0.0.0:${PUBLIC_HTTP_PORT:-80}:8080']
-assert 'PUBLIC_HTTP_PORT=80' in (ROOT / '.env.example').read_text().splitlines()
+assert set(http_override['services']) == {'admin-api', 'gateway'}
 assert 'PUBLIC_HTTP_PORT' not in (ROOT / 'deploy/compose.yml').read_text(), 'HTTP測試端口不得影響正式HTTPS或管理端'
-assert isinstance(http_web['volumes'], ReplaceList)
-assert http_web['volumes'] == [web['volumes'][0], {
-    'type': 'bind', 'source': '../public_frontend/nginx-http.conf', 'target': '/etc/nginx/transport.conf',
-    'read_only': True, 'bind': {'create_host_path': False}}]
 http_services = http_override['services']
-http_origin = 'http://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTP_PORT:-27181}'
-assert http_services['admin-api'] == {'environment': {'LAB_ADMIN_ORIGIN': http_origin, 'LAB_HTTP_TEST': 'true'}}
-assert http_services['tools'] == {'environment': {'LAB_ADMIN_ORIGIN': http_origin}}
+assert http_services['admin-api'] == {'environment': {'LAB_HTTP_TEST': 'true'}}
 http_gateway = http_services['gateway']
 assert set(http_gateway) == {'environment', 'ports', 'volumes'}
-assert http_gateway['environment'] == {'ADMIN_HTTP_PORT': '${ADMIN_HTTP_PORT:-27181}', 'LAB_HTTP_TEST': 'true'}
-assert isinstance(http_gateway['ports'], ReplaceList) and http_gateway['ports'] == ['0.0.0.0:${ADMIN_HTTP_PORT:-27181}:27182']
-assert isinstance(http_gateway['volumes'], ReplaceList) and http_gateway['volumes'] == []
-assert 'ADMIN_HTTP_PORT=27181' in (ROOT / '.env.example').read_text().splitlines()
+assert http_gateway['environment'] == {'LAB_HTTP_TEST': 'true'}
+assert isinstance(http_gateway['ports'], ReplaceList) and http_gateway['ports'] == ['0.0.0.0:80:8080', '0.0.0.0:27181:27181']
+assert isinstance(http_gateway['volumes'], ReplaceList) and http_gateway['volumes'] == [web['volumes'][0]]
+assert '${' not in (ROOT / 'deploy/compose.yml').read_text() + (ROOT / 'deploy/compose.http.yml').read_text()
+assert not (ROOT / '.env.example').exists()
 assert 'ADMIN_HTTP_PORT' not in (ROOT / 'deploy/compose.yml').read_text()
-for config in (proxy, nginx):
+for config in (common,):
     for name in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
         assert f'{name}_temp_path /tmp/' in config
     assert 'proxy_max_temp_file_size 0;' in config
@@ -235,8 +228,7 @@ build_ignore = [line for line in (ROOT / '.dockerignore').read_text().splitlines
 build_dirs = {'lab_backend', 'scripts', 'admin_frontend', 'admin_frontend/admin', 'deploy',
               'public_frontend', 'public_frontend/dist'}
 build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py',
-               'deploy/Dockerfile', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh',
-               'public_frontend/Dockerfile', 'public_frontend/nginx.conf', 'public_frontend/nginx-https.conf'}
+               'deploy/Dockerfile', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh'}
 build_files.update(str(path.relative_to(ROOT)) for path in (ROOT / 'lab_backend').glob('*.py'))
 build_files.update('admin_frontend/admin/' + name for name in ('index.html', 'app.js', 'style.css'))
 build_files.update('public_frontend/dist/' + name for name in ('lab.html', 'lab.js', 'api.js', 'lab.css', 'gold.css'))
@@ -254,11 +246,13 @@ for path in build_files:
 for directory in ('public_frontend', 'deploy', 'admin_frontend', 'lab_backend', 'scripts'):
     assert not (ROOT / directory / '.gitignore').exists(), 'Git排除規則統一放在根目錄'
     assert not list((ROOT / directory).glob('*.dockerignore')), '不能以子目錄或Dockerfile專用規則覆蓋根白名單'
-public_docker = (ROOT / 'public_frontend/Dockerfile').read_text()
-# 官網映像只COPY七個指定檔案，不能順便取得共用context中的管理頁或Python程式。
-public_sources = {source for line in public_docker.splitlines() if line.startswith('COPY ') for source in line.split()[1:-1]}
-assert public_sources == {path for path in build_files if path.startswith('public_frontend/') and not path.endswith('/Dockerfile')}
-assert 'COPY public_frontend/nginx-https.conf /etc/nginx/transport.conf' in public_docker
+gateway_docker = (ROOT / 'deploy/Dockerfile.gateway').read_text()
+# 合併映像只複製兩個前端程式及入口設定，仍不能帶入Python、初始化來源或憑證。
+gateway_sources = {source for line in gateway_docker.splitlines() if line.startswith('COPY ') for source in line.split()[1:-1]}
+assert gateway_sources == {'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh'} | {
+    'public_frontend/dist/' + name for name in ('lab.html', 'lab.js', 'api.js', 'lab.css', 'gold.css')}
+for old_file in ('Dockerfile', 'nginx.conf', 'nginx-http.conf', 'nginx-https.conf'):
+    assert not (ROOT / 'public_frontend' / old_file).exists(), '舊版部署入口不再維護'
 for source in (ROOT / 'scripts').glob('*.py'):
     ast.parse(source.read_text(), filename=str(source))
 assert 'lab.json' not in (ROOT / 'deploy/Dockerfile').read_text()

@@ -84,7 +84,7 @@ if (!response.headers.get('content-type')?.includes('application/json')) throw n
 const {person, publications} = await response.json();
 ```
 
-找不到成員404、非法ID422、內容不可用503；代理可能回HTML、502／504或逾時。應顯示錯誤及重試，不能以空陣列冒充成功。完整[錯誤契約](API.md#錯誤處理)共用。[代理設定](../public_frontend/nginx.conf)只放行四個GET，不轉送管理路由或Cookie／Authorization。[型別同步](../ARCHITECTURE.md#契約同步)從OpenAPI生成前端型別，不手改生成檔。
+找不到成員404、非法ID422、內容不可用503；代理可能回HTML、502／504或逾時。應顯示錯誤及重試，不能以空陣列冒充成功。完整[錯誤契約](API.md#錯誤處理)共用。[代理設定](../deploy/nginx.conf.template)只放行四個GET，不轉送管理路由或Cookie／Authorization。[型別同步](../ARCHITECTURE.md#契約同步)從OpenAPI生成前端型別，不手改生成檔。
 
 ## 完整合成範例與版本範圍
 
@@ -97,6 +97,6 @@ const {person, publications} = await response.json();
 
 範例使用完全虛構資料，從暫存SQLite的實際ASGI回應產生；未讀取私人lab.json，也不附實體照片／PDF。程式內核對不代表瀏覽器、實體檔案或部署驗收通過，實際檢查見[IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md)。
 
-公開頁已固定使用上述四個API；原始data/lab.json只供明確首次seed，不再由瀏覽器讀取。public_frontend是主倉庫的普通資料夾，由Compose的public-web獨立容器提供頁面與代理。建置僅包含五個頁面程式檔，沒有data/assets原始內容。
+公開頁已固定使用上述四個API；原始data/lab.json只供明確首次seed，不再由瀏覽器讀取。public_frontend是主倉庫的普通資料夾，由共用gateway的公開listener提供頁面與代理。官網部分僅打包五個頁面程式檔，沒有data/assets原始內容。
 
 頁面啟動先GET /data/site.json，之後各頁各取一個內容API；相簿頁讀home，聯絡頁只用固定設定。site.json由Nginx唯讀提供，頂層只有siteSettings、assets（品牌圖）、opportunities（固定聯絡文字），沒有people/publications或合照ID清單。首頁合照仍由SQLite home API決定。初始化、公開檔案與配對備份見[OPERATIONS](OPERATIONS.md)。此靜態設定不計入四個業務API，也不作API故障時的回退。

@@ -1,34 +1,21 @@
 # sh deploy/lab.sh http ... 明確選用；需支援 !override 的 Compose 2.24.4+。
 # 使用同一映像及資料 volume，只替換傳輸入口，不複製頁面／API 路由。
 services:
-  public-web:
-    # 必須取代整份清單，否則 Compose 會額外保留 443 與憑證掛載。
-    # 主機80被既有服務使用時，可只改測試端口；容器及正式HTTPS端口保持固定。
-    ports: !override ["0.0.0.0:${PUBLIC_HTTP_PORT:-80}:8080"]
+  # 測試模式才允許 HTTP Cookie；帳密、精確 Origin 及 CSRF 驗證照常執行。
+  admin-api:
+    environment:
+      LAB_HTTP_TEST: "true"
+  gateway:
+    environment:
+      LAB_HTTP_TEST: "true"
+    # 管理端口內外相同；官網使用8080以維持非root、無capabilities。
+    ports: !override
+      - "0.0.0.0:80:8080"
+      - "0.0.0.0:27181:27181"
+    # HTTP僅保留公開檔案，不要求兩組憑證存在，也不掛主機Nginx設定。
     volumes: !override
       - type: volume
         source: lab_data
         target: /srv/public
         read_only: true
         volume: {subpath: public, nocopy: true}
-      - type: bind
-        source: ../public_frontend/nginx-http.conf
-        target: /etc/nginx/transport.conf
-        read_only: true
-        bind: {create_host_path: false}
-
-  # 測試模式才允許 HTTP Cookie；帳密、精確 Origin 及 CSRF 驗證照常執行。
-  admin-api:
-    environment:
-      LAB_ADMIN_ORIGIN: http://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTP_PORT:-27181}
-      LAB_HTTP_TEST: "true"
-  gateway:
-    environment:
-      ADMIN_HTTP_PORT: ${ADMIN_HTTP_PORT:-27181}
-      LAB_HTTP_TEST: "true"
-    ports: !override ["0.0.0.0:${ADMIN_HTTP_PORT:-27181}:27182"]
-    # 取代正式憑證掛載，HTTP 不要求 secrets/tls 存在。
-    volumes: !override []
-  tools:
-    environment:
-      LAB_ADMIN_ORIGIN: http://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTP_PORT:-27181}

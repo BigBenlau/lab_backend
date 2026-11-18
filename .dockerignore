@@ -1,4 +1,4 @@
-# 三個映像共用專案根目錄context與本白名單；各Dockerfile只COPY自身所需檔案。
+# 兩個映像共用專案根目錄context與本白名單；各Dockerfile只COPY自身所需檔案。
 # 預設排除全部：Git、機密、初始化data/assets、執行庫、備份及開發資料均不傳給builder。
 **
 
@@ -35,12 +35,9 @@ deploy/**
 !deploy/nginx.conf.template
 !deploy/gateway-entrypoint.sh
 
-# 官網只需五個頁面檔案；HTTP片段在運行時掛載，不加入映像。
+# 共用gateway只加入官網五個頁面檔案；資料及資產由volume管理。
 !public_frontend/
 public_frontend/**
-!public_frontend/Dockerfile
-!public_frontend/nginx.conf
-!public_frontend/nginx-https.conf
 !public_frontend/dist/
 public_frontend/dist/**
 !public_frontend/dist/lab.html

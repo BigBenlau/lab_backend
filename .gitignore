@@ -13,10 +13,9 @@ htmlcov/
 *.log
 .DS_Store
 
-# 機密與環境設定；只有根目錄的不含機密範例可提交。
+# 機密與舊環境設定；部署不再讀取.env，保留忽略以防意外提交。
 .env
 .env.*
-!/.env.example
 secrets/
 *.pem
 *.key

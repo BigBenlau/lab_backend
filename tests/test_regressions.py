@@ -31,7 +31,7 @@ from lab_backend.store import TABLES, Store, StoreError, decode_csv, encode_csv,
 
 
 async def request(app, path, *, method='GET', body=None, token='', csrf='', include_headers=False,
-                  host='127.0.0.1', origin='http://127.0.0.1', cookie_name='lab_session_dev'):
+                  host='127.0.0.1', origin='http://127.0.0.1', cookie_name='lab_session_dev', extra_headers=()):
     """直接傳入 ASGI 請求；可模擬正式與 HTTP 測試入口，完全不開網路。"""
     raw = b'' if body is None else json.dumps(body).encode()
     headers = [(b'host', host.encode()), (b'content-type', b'application/json')]
@@ -41,6 +41,7 @@ async def request(app, path, *, method='GET', body=None, token='', csrf='', incl
         headers.append((b'cookie', f'{cookie_name}={token}'.encode()))
     if csrf:
         headers.append((b'x-csrf-token', csrf.encode()))
+    headers.extend(extra_headers)
     path, _, query = path.partition('?')
     scope = {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'scheme': 'http',
              'method': method, 'path': path, 'raw_path': path.encode(), 'query_string': query.encode(),
@@ -84,7 +85,7 @@ class RegressionTests(unittest.TestCase):
     @contextmanager
     def env(self):
         with patch.dict(os.environ, {'LAB_STORAGE': str(self.store.root),
-                                     'LAB_ADMIN_ORIGIN': 'http://127.0.0.1', 'LAB_DEV': 'true', 'LAB_HTTP_TEST': 'false'}):
+                                     'LAB_DEV': 'true', 'LAB_HTTP_TEST': 'false'}):
             yield
 
 
@@ -112,19 +113,28 @@ class RegressionTests(unittest.TestCase):
                 self.assertEqual(status, 200)
         self.with_app(run)
 
-    def test_http_test_mode_is_explicit_and_dev_remains_loopback_only(self):
-        """未選用測試模式時拒絕遠端 HTTP；錯拼開關不得默默降低正式設定。"""
-        base = {'LAB_DEV': 'false', 'LAB_HTTP_TEST': 'false', 'LAB_ADMIN_ORIGIN': 'http://192.0.2.10:27181'}
-        for changes in ({}, {'LAB_DEV': 'true'}, {'LAB_HTTP_TEST': 'TRUE'},
-                        {'LAB_HTTP_TEST': 'true', 'LAB_DEV': 'true'},
-                        {'LAB_HTTP_TEST': 'true', 'LAB_ADMIN_ORIGIN': 'https://admin.example:27182'}):
-            with self.subTest(changes=changes), patch.dict(os.environ, {**base, **changes}):
-                with self.assertRaises(ValueError):
-                    Config.load(admin=True)
-        with patch.dict(os.environ, {**base, 'LAB_HTTP_TEST': 'true'}):
-            config = Config.load(admin=True)
-            self.assertFalse(config.dev)
-            self.assertFalse(config.secure_cookie)
+    def test_origin_uses_actual_host_but_enforces_scheme_port_and_local_dev(self):
+        """任意實際主機可登入，同源仍精確包含協定與端口；不接受跨站Origin。"""
+        for http_test, scheme in ((True, 'http'), (False, 'https')):
+            with patch.dict(os.environ, {'LAB_DEV': 'false', 'LAB_HTTP_TEST': str(http_test).lower()}):
+                config = Config.load()
+                for host in ('192.0.2.10:27181', 'admin.example:27182', 'other.example:27181'):
+                    self.assertTrue(config.accepts_origin(f'{scheme}://{host}', host))
+                    self.assertFalse(config.accepts_origin(f'{scheme}://elsewhere.example', host))
+                    self.assertFalse(config.accepts_origin(f'{scheme}://{host}0', host))
+                    self.assertFalse(config.accepts_origin(f'{scheme}://{host}/', host))
+                    self.assertFalse(config.accepts_origin('null', host))
+                self.assertFalse(config.accepts_origin('http://admin.example', 'admin.example') if scheme == 'https'
+                                 else config.accepts_origin('https://admin.example', 'admin.example'))
+                for host in ('', 'user@admin.example', 'admin.example/path', 'admin.example:70000', 'a b', 'admin.example\\bad'):
+                    self.assertFalse(config.accepts_origin(f'{scheme}://{host}', host))
+        for settings in ({'LAB_DEV': 'false', 'LAB_HTTP_TEST': 'TRUE'}, {'LAB_DEV': 'true', 'LAB_HTTP_TEST': 'true'}):
+            with patch.dict(os.environ, settings), self.assertRaises(ValueError):
+                Config.load()
+        with self.env():
+            config = Config.load()
+            self.assertTrue(config.accepts_origin('http://127.0.0.1', '127.0.0.1'))
+            self.assertFalse(config.accepts_origin('http://remote.example', 'remote.example'))
 
     def test_http_and_https_login_keep_password_origin_csrf_and_account_checks(self):
         """同一管理 API 在兩種傳輸下可登入／讀寫／登出；只有 Cookie 傳輸屬性不同。"""
@@ -144,6 +154,15 @@ class RegressionTests(unittest.TestCase):
                     status, _ = await request(app, '/api/v1/auth/login', method='POST', body=credentials,
                                               **{**options, 'origin': bad_origin})
                     self.assertEqual(status, 403)
+                # 即使偽造轉發主機／協定，也不能讓跨站請求變成同源。
+                status, _ = await request(app, '/api/v1/auth/login', method='POST', body=credentials,
+                    **{**options, 'origin': 'http://evil.example'},
+                    extra_headers=((b'x-forwarded-host', b'evil.example'), (b'x-forwarded-proto', b'http')))
+                self.assertEqual(status, 403)
+                alias = 'other.example:27181' if http_test else 'other.example:27182'
+                status, _ = await request(app, '/api/v1/auth/login', method='POST', body=credentials,
+                    **{**options, 'host': alias, 'origin': ('http://' if http_test else 'https://') + alias})
+                self.assertEqual(status, 200, '登入不依賴固定域名白名單')
                 status, _, headers = await request(app, '/api/v1/auth/login', method='POST',
                     body={**credentials, 'password': 'wrong-password'}, include_headers=True, **options)
                 self.assertEqual(status, 401)
@@ -180,8 +199,7 @@ class RegressionTests(unittest.TestCase):
             with self.subTest(http_test=http_test):
                 self.store.change(lambda s: s['users'][0].update(active=True), resources=('users',))
                 env = {'LAB_STORAGE': str(self.store.root), 'LAB_DEV': 'false',
-                       'LAB_HTTP_TEST': 'true' if http_test else 'false',
-                       'LAB_ADMIN_ORIGIN': 'http://192.0.2.10:27181' if http_test else 'https://admin.example:27182'}
+                       'LAB_HTTP_TEST': 'true' if http_test else 'false'}
                 with patch.dict(os.environ, env):
                     asyncio.run(run(http_test))
 
