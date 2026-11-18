@@ -2,5 +2,8 @@ FROM nginx:1.30.6-alpine
 COPY admin_frontend/admin /srv/admin
 COPY deploy/nginx.conf.template /etc/lab/nginx.conf.template
 COPY deploy/gateway-entrypoint.sh /etc/lab/entrypoint.sh
+# 程式與設定保留root擁有、讓執行帳戶可讀；腳本由/bin/sh讀取，不需執行位元。
+RUN find /srv/admin /etc/lab -type d -exec chmod 0755 {} + \
+    && find /srv/admin /etc/lab -type f -exec chmod 0644 {} +
 USER 10001:10001
 ENTRYPOINT ["/bin/sh", "/etc/lab/entrypoint.sh"]

@@ -87,6 +87,8 @@ gateway就是Nginx管理入口，提供管理頁靜態檔、HTTPS、合法Host�
 
 2026-11-17確認全Docker部署、首次空庫；管理員直接經受來源IP限制的HTTPS端口登入，取代SSH通道前提。VPS只需既有Docker／Compose及可用維護控制台，不安裝主機Python或修改systemd；SSH可以不公開，關閉前須確認雲端控制台／救援入口可用。唯一資料volume預設名lab-backend_lab_data，使用local driver；兩庫與journal共用檔案系統，管理和維護一律掛/data。Dockerfile準備空/data權限，顯式init建立資料，不在啟動時自動匯入／重建；刪容器保留volume，刪volume會失去資料。
 
+映像中的自有程式／設定由root擁有，建置時明確設為目錄0755、檔案0644，避免COPY沿用主機0600／0700模式而使UID10001無法讀取；執行時仍非root、rootfs唯讀。這項處理不觸及/data、TLS私鑰或主機bind來源；初始化來源及HTTP設定片段等掛載檔案須另外確保UID10001可讀，不以root執行或chmod 777排錯。
+
 tools沿用同一Python映像與非root限制，提供初始化、CSV、備份／恢復及監測。平時為臨時容器，只有明確watch才成為第五個常駐容器；可連兩內網以探測服務，不提供listener、不掛Docker socket。deploy/lab.sh統一Docker命令，沒有主機Python依賴。
 
 Cloud DNS負責網域指向VPS，ADMIN_HOST則指定應用接受的管理主機名，不能從任意請求Host推導可信Origin。ADMIN_HOST與ADMIN_HTTPS_PORT共同生成管理Origin；對外端口限定1024–65535，預設27182，443保留給官網。HTTPS憑證以目錄唯讀掛載，SAN須符合主機名；網域／端口先檢查合法性，再nginx -t後啟動。
