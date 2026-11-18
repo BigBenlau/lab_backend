@@ -121,6 +121,7 @@ assert all('docker.sock' not in str(service) for service in services.values())
 assert all('/data' not in v['target'] for v in services['gateway']['volumes'])
 assert services['admin-api']['command'].count('1') == 1
 assert services['admin-api']['environment']['LAB_DEV'] == 'false'
+assert services['admin-api']['environment']['LAB_HTTP_TEST'] == 'false'
 assert not set(services['public-api']['networks']) & set(services['admin-api']['networks'])
 assert not set(services['public-api']['networks']) & set(services['gateway']['networks'])
 assert services['gateway']['ports'] == ['0.0.0.0:${ADMIN_HTTPS_PORT:-27182}:27182']
@@ -132,15 +133,21 @@ nginx = (ROOT / 'deploy/nginx.conf.template').read_text()
 assert '8443' not in nginx and '/api/v1/public/' not in nginx
 assert 'resolver 127.0.0.11' in nginx and 'proxy_pass http://$admin_upstream' in nginx
 assert 'X-Real-IP $remote_addr' in nginx
-assert 'listen 27182 ssl default_server;' in nginx
+assert 'include /tmp/transport.conf;' in nginx
+assert 'map $scheme $hsts { https "max-age=31536000"; default ""; }' in nginx
+assert 'add_header Strict-Transport-Security $hsts always;' in nginx
 assert 'server_name ${ADMIN_HOST};' in nginx and 'if ($host != "${ADMIN_HOST}")' in nginx
 assert 'set_real_ip_from' not in nginx and 'real_ip_header' not in nginx
 assert not re.search(r'^\s*(allow|deny|satisfy)\s', nginx, re.M), '來源 IP 僅由 Cloud 防火牆管理'
 assert 'admin-allowlist' not in nginx and 'limit_req zone=login_rate' in nginx
 assert 'location ~ ^/api/v1/(auth|admin)/' in nginx and 'location /api/ { return 404; }' in nginx
-assert set(services['gateway']['environment']) == {'ADMIN_HOST', 'ADMIN_HTTPS_PORT'}
+assert set(services['gateway']['environment']) == {'ADMIN_HOST', 'ADMIN_HTTPS_PORT', 'LAB_HTTP_TEST'}
+assert services['gateway']['environment']['LAB_HTTP_TEST'] == 'false'
 entrypoint = (ROOT / 'deploy/gateway-entrypoint.sh').read_text()
 assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' in entrypoint
+assert 'listen 27182 ssl default_server;' in entrypoint
+assert 'ssl_certificate /run/tls/cert.pem;' in entrypoint
+assert 'ssl_certificate_key /run/tls/key.pem;' in entrypoint
 
 # 官網只讀 public 子目錄；API 路徑白名單不得擴張到管理或探測端點。
 web = services['public-web']
@@ -198,7 +205,7 @@ class ComposeLoader(yaml.SafeLoader):
 ComposeLoader.add_constructor('!override', lambda loader, node: ReplaceList(loader.construct_sequence(node, deep=True)))
 http_override = yaml.load((ROOT / 'deploy/compose.http.yml').read_text(), Loader=ComposeLoader)
 assert set(http_override) == {'services'}
-assert set(http_override['services']) == {'public-web', 'admin-api', 'gateway'}
+assert set(http_override['services']) == {'public-web', 'admin-api', 'gateway', 'tools'}
 http_web = http_override['services']['public-web']
 assert set(http_web) == {'ports', 'volumes'}, 'HTTP 必須沿用原映像、內網及權限設定'
 assert isinstance(http_web['ports'], ReplaceList) and http_web['ports'] == ['0.0.0.0:${PUBLIC_HTTP_PORT:-80}:8080']
@@ -208,7 +215,17 @@ assert isinstance(http_web['volumes'], ReplaceList)
 assert http_web['volumes'] == [web['volumes'][0], {
     'type': 'bind', 'source': '../public_frontend/nginx-http.conf', 'target': '/etc/nginx/transport.conf',
     'read_only': True, 'bind': {'create_host_path': False}}]
-assert all(http_override['services'][name] == {'profiles': ['https-admin']} for name in ('admin-api', 'gateway'))
+http_services = http_override['services']
+http_origin = 'http://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTP_PORT:-27181}'
+assert http_services['admin-api'] == {'environment': {'LAB_ADMIN_ORIGIN': http_origin, 'LAB_HTTP_TEST': 'true'}}
+assert http_services['tools'] == {'environment': {'LAB_ADMIN_ORIGIN': http_origin}}
+http_gateway = http_services['gateway']
+assert set(http_gateway) == {'environment', 'ports', 'volumes'}
+assert http_gateway['environment'] == {'ADMIN_HTTP_PORT': '${ADMIN_HTTP_PORT:-27181}', 'LAB_HTTP_TEST': 'true'}
+assert isinstance(http_gateway['ports'], ReplaceList) and http_gateway['ports'] == ['0.0.0.0:${ADMIN_HTTP_PORT:-27181}:27182']
+assert isinstance(http_gateway['volumes'], ReplaceList) and http_gateway['volumes'] == []
+assert 'ADMIN_HTTP_PORT=27181' in (ROOT / '.env.example').read_text().splitlines()
+assert 'ADMIN_HTTP_PORT' not in (ROOT / 'deploy/compose.yml').read_text()
 for config in (proxy, nginx):
     for name in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
         assert f'{name}_temp_path /tmp/' in config

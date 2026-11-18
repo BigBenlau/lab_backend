@@ -44,6 +44,7 @@ class GatewaySettingsTests(unittest.TestCase):
             path.chmod(0o700)
         self.env = {**os.environ, 'PATH': str(self.root) + os.pathsep + os.environ['PATH'],
                     'ADMIN_HOST': 'admin.example', 'ADMIN_HTTPS_PORT': '27182',
+                    'LAB_HTTP_TEST': 'false',
                     'GATEWAY_CALLS': str(self.root / 'calls')}
 
     def run_entry(self, **changes):
@@ -63,11 +64,29 @@ class GatewaySettingsTests(unittest.TestCase):
                 self.assertEqual(len(calls), 2)
                 self.assertTrue(calls[0].startswith('-t -c '))
                 self.assertTrue(calls[1].endswith('-g daemon off;'))
+                transport = (self.root / 'transport.conf').read_text()
+                self.assertIn('listen 27182 ssl default_server;', transport)
+                self.assertIn('ssl_certificate /run/tls/cert.pem;', transport)
+                self.assertIn('ssl_certificate_key /run/tls/key.pem;', transport)
+                self.assertIn('ssl_protocols TLSv1.2 TLSv1.3;', transport)
+
+    def test_http_needs_no_certificate_and_switching_back_restores_tls(self):
+        """顯式 HTTP 共用路由但不載入憑證；切回正式模式必須重新產生 TLS 設定。"""
+        for port in ('', '27181', '31827'):
+            result = self.run_entry(LAB_HTTP_TEST='true', ADMIN_HOST='192.0.2.10', ADMIN_HTTP_PORT=port)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((self.root / 'transport.conf').read_text(), 'listen 27182 default_server;\n')
+        self.assertEqual(self.run_entry().returncode, 0)
+        self.assertIn('ssl_certificate ', (self.root / 'transport.conf').read_text())
+        for port in ('80', '0', '027181', '65536', '27181;'):
+            self.assertNotEqual(self.run_entry(LAB_HTTP_TEST='true', ADMIN_HTTP_PORT=port).returncode, 0)
+            self.assertFalse((self.root / 'calls').exists())
 
     def test_bad_settings_never_start_nginx(self):
         """維持端口範圍與Host設定注入檢查；不把雲端規則混入程式設定。"""
         cases = [('ADMIN_HTTPS_PORT', value) for value in ('443', '0', '027182', '65536', '-1', '27182;')]
         cases += [('ADMIN_HOST', value) for value in ('', 'https://admin.example', 'admin.example; include /tmp/other;')]
+        cases += [('LAB_HTTP_TEST', value) for value in ('TRUE', '1', 'http;')]
         for key, value in cases:
             with self.subTest(key=key, value=value):
                 self.assertNotEqual(self.run_entry(**{key: value}).returncode, 0)

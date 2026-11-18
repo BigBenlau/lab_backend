@@ -30,11 +30,15 @@ from lab_backend.auth import PASSWORDS, audit
 from lab_backend.store import TABLES, Store, StoreError, decode_csv, encode_csv, write_new
 
 
-async def request(app, path, *, method='GET', body=None, token='', csrf='', include_headers=False):
+async def request(app, path, *, method='GET', body=None, token='', csrf='', include_headers=False,
+                  host='127.0.0.1', origin='http://127.0.0.1', cookie_name='lab_session_dev'):
+    """直接傳入 ASGI 請求；可模擬正式與 HTTP 測試入口，完全不開網路。"""
     raw = b'' if body is None else json.dumps(body).encode()
-    headers = [(b'host', b'127.0.0.1'), (b'origin', b'http://127.0.0.1'), (b'content-type', b'application/json')]
+    headers = [(b'host', host.encode()), (b'content-type', b'application/json')]
+    if origin is not None:
+        headers.append((b'origin', origin.encode()))
     if token:
-        headers.append((b'cookie', f'lab_session_dev={token}'.encode()))
+        headers.append((b'cookie', f'{cookie_name}={token}'.encode()))
     if csrf:
         headers.append((b'x-csrf-token', csrf.encode()))
     path, _, query = path.partition('?')
@@ -80,7 +84,7 @@ class RegressionTests(unittest.TestCase):
     @contextmanager
     def env(self):
         with patch.dict(os.environ, {'LAB_STORAGE': str(self.store.root),
-                                     'LAB_ADMIN_ORIGIN': 'http://127.0.0.1', 'LAB_DEV': 'true'}):
+                                     'LAB_ADMIN_ORIGIN': 'http://127.0.0.1', 'LAB_DEV': 'true', 'LAB_HTTP_TEST': 'false'}):
             yield
 
 
@@ -107,6 +111,79 @@ class RegressionTests(unittest.TestCase):
                 status, _ = await request(app, '/api/v1/admin/content/people', token=token)
                 self.assertEqual(status, 200)
         self.with_app(run)
+
+    def test_http_test_mode_is_explicit_and_dev_remains_loopback_only(self):
+        """未選用測試模式時拒絕遠端 HTTP；錯拼開關不得默默降低正式設定。"""
+        base = {'LAB_DEV': 'false', 'LAB_HTTP_TEST': 'false', 'LAB_ADMIN_ORIGIN': 'http://192.0.2.10:27181'}
+        for changes in ({}, {'LAB_DEV': 'true'}, {'LAB_HTTP_TEST': 'TRUE'},
+                        {'LAB_HTTP_TEST': 'true', 'LAB_DEV': 'true'},
+                        {'LAB_HTTP_TEST': 'true', 'LAB_ADMIN_ORIGIN': 'https://admin.example:27182'}):
+            with self.subTest(changes=changes), patch.dict(os.environ, {**base, **changes}):
+                with self.assertRaises(ValueError):
+                    Config.load(admin=True)
+        with patch.dict(os.environ, {**base, 'LAB_HTTP_TEST': 'true'}):
+            config = Config.load(admin=True)
+            self.assertFalse(config.dev)
+            self.assertFalse(config.secure_cookie)
+
+    def test_http_and_https_login_keep_password_origin_csrf_and_account_checks(self):
+        """同一管理 API 在兩種傳輸下可登入／讀寫／登出；只有 Cookie 傳輸屬性不同。"""
+        # 停用受測帳戶時仍保留另一位管理員，遵守真實儲存規則。
+        self.store.change(lambda s: s['users'].append({**self.user, 'id': 'admin2', 'login': 'backup-admin'}), resources=('users',))
+        async def run(http_test):
+            app = admin_app()
+            host = '192.0.2.10:27181' if http_test else 'admin.example:27182'
+            origin = ('http://' if http_test else 'https://') + host
+            cookie_name = 'lab_session_http_test' if http_test else '__Host-lab_session'
+            options = {'host': host, 'origin': origin, 'cookie_name': cookie_name}
+            credentials = {'login': 'tester', 'password': self.password}
+            async with app.router.lifespan_context(app):
+                self.assertEqual(app.openapi()['components']['securitySchemes']['CookieSession']['name'], cookie_name)
+                self.assertEqual((await request(app, '/api/v1/admin/content/people', **options))[0], 401)
+                for bad_origin in (None, 'http://other.example:27181', origin + '0'):
+                    status, _ = await request(app, '/api/v1/auth/login', method='POST', body=credentials,
+                                              **{**options, 'origin': bad_origin})
+                    self.assertEqual(status, 403)
+                status, _, headers = await request(app, '/api/v1/auth/login', method='POST',
+                    body={**credentials, 'password': 'wrong-password'}, include_headers=True, **options)
+                self.assertEqual(status, 401)
+                self.assertNotIn(b'set-cookie', headers)
+                status, data, headers = await request(app, '/api/v1/auth/login', method='POST', body=credentials,
+                                                      include_headers=True, **options)
+                self.assertEqual(status, 200)
+                cookies = SimpleCookie(); cookies.load(headers[b'set-cookie'].decode())
+                cookie = cookies[cookie_name]
+                self.assertEqual(bool(cookie['secure']), not http_test)
+                self.assertTrue(cookie['httponly'])
+                self.assertEqual(cookie['samesite'], 'strict')
+                self.assertEqual(cookie['path'], '/')
+                self.assertFalse(cookie['domain'])
+                auth = {**options, 'token': cookie.value}
+                self.assertEqual((await request(app, '/api/v1/auth/session', **auth))[0], 200)
+                body = {'data': Person(id='http-person' if http_test else 'https-person', familyName='Test', givenName='Person').model_dump()}
+                self.assertEqual((await request(app, '/api/v1/admin/content/people', method='POST', body=body, **auth))[0], 403)
+                status, _ = await request(app, '/api/v1/admin/content/people', method='POST', body=body, csrf=data['csrf'], **auth)
+                self.assertEqual(status, 201)
+                status, _, headers = await request(app, '/api/v1/auth/logout', method='POST', csrf=data['csrf'],
+                                                   include_headers=True, **auth)
+                self.assertEqual(status, 200)
+                cleared = SimpleCookie(); cleared.load(headers[b'set-cookie'].decode())
+                self.assertEqual(cleared[cookie_name]['max-age'], '0')
+                self.assertEqual(bool(cleared[cookie_name]['secure']), not http_test)
+                self.assertEqual((await request(app, '/api/v1/auth/session', **auth))[0], 401)
+                # HTTP 亦逐次讀取帳戶狀態，不能以已登入繞過停用。
+                token, _ = app.state.security.issue(self.user)
+                self.store.change(lambda s: s['users'][0].update(active=False), resources=('users',))
+                self.assertEqual((await request(app, '/api/v1/auth/session', **{**options, 'token': token}))[0], 401)
+
+        for http_test in (True, False):
+            with self.subTest(http_test=http_test):
+                self.store.change(lambda s: s['users'][0].update(active=True), resources=('users',))
+                env = {'LAB_STORAGE': str(self.store.root), 'LAB_DEV': 'false',
+                       'LAB_HTTP_TEST': 'true' if http_test else 'false',
+                       'LAB_ADMIN_ORIGIN': 'http://192.0.2.10:27181' if http_test else 'https://admin.example:27182'}
+                with patch.dict(os.environ, env):
+                    asyncio.run(run(http_test))
 
 
     def test_anonymous_protected_request_never_queries_database(self):

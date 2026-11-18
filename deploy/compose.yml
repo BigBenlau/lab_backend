@@ -78,6 +78,7 @@ services:
       LAB_STORAGE: /data
       LAB_ADMIN_ORIGIN: https://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTPS_PORT:-27182}
       LAB_DEV: "false"
+      LAB_HTTP_TEST: "false"
     networks: [admin_net]
     volumes:
       - type: volume
@@ -101,6 +102,7 @@ services:
     environment:
       ADMIN_HOST: ${ADMIN_HOST:?Set admin hostname}
       ADMIN_HTTPS_PORT: ${ADMIN_HTTPS_PORT:-27182}
+      LAB_HTTP_TEST: "false"
     ports:
       # 啟動前在 Cloud 防火牆限制管理來源；程式不再維護 IP 清單。
       # 明確限 IPv4，避免新增未配置雲端防火牆的 IPv6 入口。

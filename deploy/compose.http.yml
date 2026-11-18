@@ -1,5 +1,5 @@
 # sh deploy/lab.sh http ... 明確選用；需支援 !override 的 Compose 2.24.4+。
-# 使用同一映像及資料 volume，只替換官網入口，不複製頁面／API 路由。
+# 使用同一映像及資料 volume，只替換傳輸入口，不複製頁面／API 路由。
 services:
   public-web:
     # 必須取代整份清單，否則 Compose 會額外保留 443 與憑證掛載。
@@ -17,9 +17,18 @@ services:
         read_only: true
         bind: {create_host_path: false}
 
-  # 普通 http up 只啟動官網與公開 API，不需要管理域名的憑證。
-  # 管理端的帳密、Origin／CSRF 及 Secure Cookie 設定完全沿用正式模式。
+  # 測試模式才允許 HTTP Cookie；帳密、精確 Origin 及 CSRF 驗證照常執行。
   admin-api:
-    profiles: [https-admin]
+    environment:
+      LAB_ADMIN_ORIGIN: http://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTP_PORT:-27181}
+      LAB_HTTP_TEST: "true"
   gateway:
-    profiles: [https-admin]
+    environment:
+      ADMIN_HTTP_PORT: ${ADMIN_HTTP_PORT:-27181}
+      LAB_HTTP_TEST: "true"
+    ports: !override ["0.0.0.0:${ADMIN_HTTP_PORT:-27181}:27182"]
+    # 取代正式憑證掛載，HTTP 不要求 secrets/tls 存在。
+    volumes: !override []
+  tools:
+    environment:
+      LAB_ADMIN_ORIGIN: http://${ADMIN_HOST:?Set admin hostname}:${ADMIN_HTTP_PORT:-27181}

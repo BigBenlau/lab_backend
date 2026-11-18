@@ -172,7 +172,7 @@ def create_app(admin=False):
         spec = app.openapi()
         spec['components']['securitySchemes'] = {'CookieSession': {
             'type': 'apiKey', 'in': 'cookie',
-            'name': 'lab_session_dev' if config.dev else '__Host-lab_session'}}
+            'name': config.session_cookie}}
         for path, operations in spec['paths'].items():
             for method, operation in operations.items():
                 login = path == '/api/v1/auth/login' and method == 'post'

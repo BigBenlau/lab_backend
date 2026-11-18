@@ -80,7 +80,9 @@ flowchart LR
 
 兩API無主機端口。public-api只掛volume的content子目錄唯讀；admin-api掛完整volume到/data、可寫兩庫；gateway不掛DB、不加入公開內容網路，對外IPv4端口由ADMIN_HTTPS_PORT指定（預設27182），容器內固定27182。public-web以獨立Nginx容器使用443（內部8443），僅連public_edge及lab-content，唯讀掛public子目錄，不接觸SQLite或private。四個常駐容器保留非root、唯讀rootfs、cap_drop、no-new-privileges及資源限制；無VPN前提或獨立DB容器。
 
-內容預覽可明確選用deploy/compose.http.yml：官網改為HTTP（主機PUBLIC_HTTP_PORT預設80→容器8080）、移除TLS掛載，預設僅啟動public-web及public-api。端口衝突時由部署者明確選用未佔用端口，不自動終止主機服務或改選端口。兩種入口共用同一映像、nginx.conf中的路由／安全標頭、資料volume與四個API；僅transport.conf切換監聽和憑證設定，HTTP不發HSTS或跳轉HTTPS。管理端的HTTPS、Session及Origin／CSRF設定不變，API仍不發布主機端口。這是未加密的內容測試入口；正式443與自動續期規劃保留，啟動／切回步驟集中OPERATIONS。
+測試可明確選用deploy/compose.http.yml：官網HTTP為PUBLIC_HTTP_PORT預設80→8080，管理HTTP為ADMIN_HTTP_PORT預設27181→27182，兩入口都取代正式端口及TLS掛載，不需憑證，四個常駐服務均可啟動。兩模式共用頁面、路由、資料volume及API，不複製管理業務。Nginx只切換transport.conf中的監聽／TLS指令，HTTP不發HSTS、不跳轉HTTPS；gateway測試片段由entrypoint生成固定指令，正式仍為原TLS設定。端口衝突由部署者明確處理，不自動停止其他服務。
+
+HTTP管理模式須由覆蓋檔明確設定LAB_HTTP_TEST=true及精確http Origin；ADMIN_HOST可為實際測試IPv4或域名。使用獨立lab_session_http_test Cookie、不設Secure，保留HttpOnly、SameSite=Strict、帳密、Origin／CSRF、帳戶狀態與登入限流；LAB_DEV仍僅限loopback且不可與HTTP測試同開。正式Compose明確設LAB_HTTP_TEST=false，使用HTTPS Origin與__Host-lab_session Secure Cookie，設定或切換後重建服務、重新登入。HTTP不加密密碼及Cookie，只供受Cloud來源限制的受控測試；兩API仍不發布主機端口。啟動及切回步驟集中OPERATIONS。
 
 全專案只維護根目錄.gitignore與.dockerignore，不使用子目錄或Dockerfile專用排除檔。Git排除機密、初始化來源、執行庫／journal、交換檔、備份與開發快取，保留根.env.example及程式／契約。三個映像的build context統一為專案根目錄；[Docker建置白名單](https://docs.docker.com/build/concepts/context/#dockerignore-files)預設排除全部，只放行Python模組、兩支維護腳本、管理三檔、官網五檔及所需建置／Nginx設定，各Dockerfile再只COPY自己的程式。新增依賴檔案須同步根白名單；初始化來源只在seed時唯讀掛載，不經builder。
 

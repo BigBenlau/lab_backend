@@ -31,7 +31,7 @@ Id為1–200字元，英數開頭，其餘英數／底線／連字號。成員�
 
 管理頁與gateway同源，上游admin-api不開主機port。resource限assets、people、publications：CRUD各4操作，共12；另有schema/references 2、auth 4、users 3、audit 1，合計22。
 
-部署入口為https://ADMIN_HOST:ADMIN_HTTPS_PORT（預設27182），來源IP僅由Cloud防火牆限制，API驗證登入與權限。ADMIN_HOST供Host／Origin驗證，不代替DNS；雲端阻擋通常無API回應。設定方式見[OPERATIONS](OPERATIONS.md)。
+正式入口為https://ADMIN_HOST:ADMIN_HTTPS_PORT（預設27182）；明確選用HTTP測試則為http://ADMIN_HOST:ADMIN_HTTP_PORT（預設27181）。兩模式來源IP均由Cloud防火牆限制，API驗證登入與權限。ADMIN_HOST供Host／Origin驗證，不代替DNS；雲端阻擋通常無API回應。設定方式見[OPERATIONS](OPERATIONS.md)。
 
 | 方法與路徑 | 輸入 | 成功輸出 | 管理頁入口 |
 |---|---|---|---|---|
@@ -52,7 +52,7 @@ Id為1–200字元，英數開頭，其餘英數／底線／連字號。成員�
 
 ### 登入、Header與帳戶模型
 
-除登入外皆需Cookie。所有非GET請求（含登入）帶精確`Origin=LAB_ADMIN_ORIGIN`；除登入外另帶`X-CSRF-Token`，取自login/session回應。正式Cookie為`__Host-lab_session`，HttpOnly／Secure／SameSite=Strict／Path=/；loopback開發模式改用`lab_session_dev`、不設Secure。fetch使用同源credentials。
+除登入外皆需Cookie。所有非GET請求（含登入）帶精確`Origin=LAB_ADMIN_ORIGIN`；除登入外另帶`X-CSRF-Token`，取自login/session回應。正式Cookie為`__Host-lab_session`，HttpOnly／Secure／SameSite=Strict／Path=/；明確HTTP測試用`lab_session_http_test`、不設Secure，loopback開發用`lab_session_dev`。其他Cookie屬性及驗證不變，fetch使用同源credentials，由瀏覽器管理Cookie，不硬編碼其名稱。版本控制中的OpenAPI描述正式HTTPS Cookie，HTTP不改路由、輸入輸出或業務契約。
 
 Session固定八小時、重啟失效、不滑動延期。登出撤銷本次登入；改密碼或啟停帳戶撤銷該帳戶所有Session；無refresh token。首位管理員由離線CLI建立，無匿名註冊／使用者刪除API，最後一名啟用管理員不可停用。
 

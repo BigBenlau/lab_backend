@@ -40,6 +40,7 @@ def sync(check=False):
     """只建立路由表，不進lifespan；check模式比對差異，不寫任何檔案。"""
     os.environ['LAB_ADMIN_ORIGIN'] = 'https://admin.lab.example'
     os.environ['LAB_DEV'] = 'false'
+    os.environ['LAB_HTTP_TEST'] = 'false'
     from lab_backend.application import public_app, admin_app
     specs = {'public': public_app().openapi(), 'admin': admin_app().openapi()}
     files = {ROOT / f'docs/{name}-openapi.json': json.dumps(spec, ensure_ascii=False, indent=2) + '\n'

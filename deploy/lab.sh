@@ -4,7 +4,7 @@ set -eu
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 LAB_HTTP_MODE=false
 if [ "${1:-}" = http ]; then
-    # 顯式選擇官網 HTTP 入口；不把測試模式寫進正式 .env。
+    # 顯式選擇官網及管理 HTTP 入口；不把測試模式寫進正式 .env。
     LAB_HTTP_MODE=true
     shift
 fi
@@ -90,7 +90,7 @@ case "${1:-help}" in
         ;;
     help)
         echo '用法：sh deploy/lab.sh build --pull | init | up -d | ps | logs'
-        echo '官網 HTTP：sh deploy/lab.sh http <命令>；預設80，.env可設PUBLIC_HTTP_PORT，詳見 docs/OPERATIONS.md。'
+        echo 'HTTP 測試：sh deploy/lab.sh http <命令>；官網預設80，管理預設27181，詳見 docs/OPERATIONS.md。'
         echo '建置前檢查：check-web（只檢查官網程式檔案，不呼叫 Docker）'
         echo '首次內容：seed（預覽）| seed --apply（建立 CSV 與檔案 bundle）'
         echo '維護：cli <命令> | maintenance <命令> | watch'

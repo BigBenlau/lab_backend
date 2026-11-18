@@ -57,7 +57,7 @@ class Security:
     def __init__(self, config):
         """保存設定與記憶體 Session，不再讀取 MFA 金鑰。"""
         self.config = config
-        self.cookie = 'lab_session_dev' if config.dev else '__Host-lab_session'
+        self.cookie = config.session_cookie
         self.sessions: dict[str, Session] = {}
         self.lock = threading.RLock()
         self.password_slots = threading.BoundedSemaphore(2)
@@ -217,7 +217,7 @@ def login(body: Credentials, request: Request, response: Response):
         return user
     user = store.change(operation, resources=('users',))
     token, session = sec.issue(user)
-    response.set_cookie(sec.cookie, token, secure=not sec.config.dev, httponly=True,
+    response.set_cookie(sec.cookie, token, secure=sec.config.secure_cookie, httponly=True,
                         samesite='strict', path='/', max_age=SESSION_SECONDS)
     return {'user': public_user(user), 'csrf': session.csrf}
 
@@ -234,7 +234,7 @@ def logout(request: Request, response: Response):
     """撤銷目前登入並移除 Cookie。"""
     sec = request.app.state.security
     sec.logout(request)
-    response.delete_cookie(sec.cookie, path='/', secure=not sec.config.dev, httponly=True, samesite='strict')
+    response.delete_cookie(sec.cookie, path='/', secure=sec.config.secure_cookie, httponly=True, samesite='strict')
     return {'ok': True}
 
 

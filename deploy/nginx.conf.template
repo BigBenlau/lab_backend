@@ -23,10 +23,6 @@ http {
     limit_req_zone $binary_remote_addr zone=admin_rate:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=login_rate:1m rate=6r/m;
     limit_req_status 429;
-    ssl_certificate /run/tls/cert.pem;
-    ssl_certificate_key /run/tls/key.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_session_tickets off;
     proxy_connect_timeout 3s;
     proxy_read_timeout 20s;
     proxy_send_timeout 20s;
@@ -38,7 +34,9 @@ http {
     proxy_set_header X-Forwarded-Proto "";
     proxy_set_header Connection "";
     proxy_http_version 1.1;
-    add_header Strict-Transport-Security "max-age=31536000" always;
+    # HTTP 測試不能令瀏覽器記住強制 HTTPS；正式 HTTPS 的 HSTS 保持不變。
+    map $scheme $hsts { https "max-age=31536000"; default ""; }
+    add_header Strict-Transport-Security $hsts always;
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
@@ -46,7 +44,7 @@ http {
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
 
     server {
-        listen 27182 ssl default_server;
+        include /tmp/transport.conf;
         server_name ${ADMIN_HOST};
         if ($host != "${ADMIN_HOST}") { return 444; }
         # IP 存取由 Cloud 防火牆控制；此處保留合法 Host、TLS 與登入限流。
