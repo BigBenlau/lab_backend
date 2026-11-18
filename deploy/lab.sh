@@ -2,9 +2,18 @@
 # 單一部署入口：只呼叫 Docker，不安裝套件、不改主機 Python／systemd。
 set -eu
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+LAB_HTTP_MODE=false
+if [ "${1:-}" = http ]; then
+    # 顯式選擇官網 HTTP 入口；不把測試模式寫進正式 .env。
+    LAB_HTTP_MODE=true
+    shift
+fi
 
 compose() {
     # 固定設定檔位置，不用 source 執行 .env 內容。
+    if [ "$LAB_HTTP_MODE" = true ]; then
+        set -- -f "$PROJECT_ROOT/deploy/compose.http.yml" "$@"
+    fi
     docker compose --env-file "$PROJECT_ROOT/.env" -f "$PROJECT_ROOT/deploy/compose.yml" "$@"
 }
 
@@ -36,6 +45,7 @@ case "${1:-help}" in
         ;;
     help)
         echo '用法：sh deploy/lab.sh build --pull | init | up -d | ps | logs'
+        echo '官網 HTTP：sh deploy/lab.sh http <命令>；80 port，無需憑證，詳見 docs/OPERATIONS.md。'
         echo '首次內容：seed（預覽）| seed --apply（建立 CSV 與檔案 bundle）'
         echo '維護：cli <命令> | maintenance <命令> | watch'
         echo '其餘參數原樣交給 docker compose；停止容器用 down，勿用 down -v 刪資料。'

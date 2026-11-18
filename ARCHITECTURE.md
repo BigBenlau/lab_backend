@@ -78,6 +78,8 @@ flowchart LR
 
 兩API無主機端口。public-api只掛volume的content子目錄唯讀；admin-api掛完整volume到/data、可寫兩庫；gateway不掛DB、不加入公開內容網路，對外IPv4端口由ADMIN_HTTPS_PORT指定（預設27182），容器內固定27182。public-web以獨立Nginx容器使用443（內部8443），僅連public_edge及lab-content，唯讀掛public子目錄，不接觸SQLite或private。四個常駐容器保留非root、唯讀rootfs、cap_drop、no-new-privileges及資源限制；無VPN前提或獨立DB容器。
 
+內容預覽可明確選用deploy/compose.http.yml：官網改為HTTP80（容器8080）、移除TLS掛載，預設僅啟動public-web及public-api。兩種入口共用同一映像、nginx.conf中的路由／安全標頭、資料volume與四個API；僅transport.conf切換監聽和憑證設定，HTTP不發HSTS或跳轉HTTPS。管理端的HTTPS、Session及Origin／CSRF設定不變，API仍不發布主機端口。這是未加密的內容測試入口；正式443與自動續期規劃保留，啟動／切回步驟集中OPERATIONS。
+
 public-web以[Docker建置排除規則](https://docs.docker.com/build/concepts/context/#dockerignore-files)先排除所有檔案、只放行lab.html、lab.js、api.js、lab.css、gold.css與設定；首頁映射index.html。Nginx只代理四個GET，清除Cookie／Authorization，其他API、原始JSON及未知靜態路徑回404。網站程式每次換頁重新讀API，失敗顯示重試；不保留靜態模式或快照回退。兩個Nginx的暫存路徑都設在/tmp，符合[非root容器設定](https://github.com/nginx/docker-nginx-unprivileged/blob/main/README.md#troubleshooting-tips)；不落地快取上游回應。實體圖檔／PDF由volume的public/assets提供；固定設定由public/site.json提供，兩者都不進前端映像。
 
 gateway就是Nginx管理入口，提供管理頁靜態檔、HTTPS、合法Host檢查、API反向代理及基本登入限流，不保存內容或實作登入業務。來源IP存取僅由Cloud防火牆／安全組控制，程式不重複管理allow／deny清單；Python仍驗證帳密、Session與權限。
@@ -87,6 +89,8 @@ gateway就是Nginx管理入口，提供管理頁靜態檔、HTTPS、合法Host�
 tools沿用同一Python映像與非root限制，提供初始化、CSV、備份／恢復及監測。平時為臨時容器，只有明確watch才成為第五個常駐容器；可連兩內網以探測服務，不提供listener、不掛Docker socket。deploy/lab.sh統一Docker命令，沒有主機Python依賴。
 
 Cloud DNS負責網域指向VPS，ADMIN_HOST則指定應用接受的管理主機名，不能從任意請求Host推導可信Origin。ADMIN_HOST與ADMIN_HTTPS_PORT共同生成管理Origin；對外端口限定1024–65535，預設27182，443保留給官網。HTTPS憑證以目錄唯讀掛載，SAN須符合主機名；網域／端口先檢查合法性，再nginx -t後啟動。
+
+正式憑證方案採獨立ACME容器透過DNS API驗證，排程留在Docker內；DNS密鑰及ACME帳戶不掛給API或Nginx，不使用Docker socket或主機cron。續期需包含簽發、配對驗證及成組發布、Nginx容器內重新載入與線上憑證核對，失敗保留有效版本並告警。這套自動化尚未實作到Compose，不能把手動申請成功當成自動續期已啟用；example.org的AliDNS操作與待完成項目集中在[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)。HTTPS保護瀏覽器至Nginx的傳輸，不替代權限或資料庫加密。
 
 啟動gateway前須在Cloud安全組限制管理端口來源，且確認規則綁定實際VPS／網卡。程式已取消ADMIN_ALLOW_CIDRS，不偵測／代設雲端規則，也沒有本機IP篩選作為補救；Cloud若放行所有來源，登入頁就會對其可達。非標準端口不能阻止完整端口掃描，也不代替來源限制或登入保護。
 
@@ -100,6 +104,6 @@ public匿名唯讀、admin登入可寫，使用Argon2，無MD5、預設帳密、
 
 ## 交付邊界
 
-public_frontend是本專案的普通資料夾，已取消外部子模組連接；可直接修改並與後端一起提交，Compose使用獨立public-web容器。已刪除的內附backend副本不恢復，正式後端只在根目錄lab_backend。設計預覽及舊來源契約只供本機參考，部署白名單不包含它們。路由數量、包裝、五表及欄位沒有改動；契約若變更，仍須同步文件、OpenAPI、管理頁與生成型別。舊庫／備份不隱式遷移、覆寫或刪除。
+public_frontend的目標是作為本專案普通資料夾，與後端一起提交；Compose使用獨立public-web容器。2026-11-19核對時，本機子模組設定已移除，但主倉庫索引仍保留舊gitlink，目錄追蹤轉換尚未完成，不能聲稱Git已包含本機前端改動。已刪除的內附backend副本不恢復，正式後端只在根目錄lab_backend。設計預覽及舊來源契約只供本機參考，部署白名單不包含它們。路由數量、包裝、五表及欄位沒有改動；契約若變更，仍須同步文件、OpenAPI、管理頁與生成型別。舊庫／備份不隱式遷移、覆寫或刪除。
 
 本階段只允許語法／匯入、暫存目錄及程序內ASGI局部回歸；不啟動Docker、HTTP listener或部署。正式瀏覽器、安全、負載與故障恢復驗收延後，狀態只記實際執行結果。

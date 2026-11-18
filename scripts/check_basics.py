@@ -160,6 +160,36 @@ assert 'if ($request_method != GET)' in proxy and 'proxy_cache off;' in proxy
 assert 'location = /data/site.json { alias /srv/public/site.json; }' in proxy
 assert 'disable_symlinks on;' in proxy and 'location / { return 404; }' in proxy
 assert 'set_real_ip_from' not in proxy and 'real_ip_header' not in proxy
+assert 'include /etc/nginx/transport.conf;' in proxy
+assert 'map $scheme $hsts' in proxy and 'add_header Strict-Transport-Security $hsts always;' in proxy
+https_transport = (ROOT / 'public_frontend/nginx-https.conf').read_text()
+http_transport = (ROOT / 'public_frontend/nginx-http.conf').read_text()
+assert 'listen 8443 ssl default_server;' in https_transport
+assert 'ssl_certificate /run/tls/cert.pem;' in https_transport
+assert 'ssl_certificate_key /run/tls/key.pem;' in https_transport
+assert 'listen 8080 default_server;' in http_transport
+assert not re.search(r'\b(ssl|ssl_certificate|return|add_header)\b', http_transport)
+
+# 保留 !override 標記來檢查取代語意，不以普通清單假裝 Compose 已合併成功。
+# 真實 Compose 合併、Nginx 解析與端口可達性仍須在部署環境驗證。
+class ReplaceList(list):
+    """標記必須整份取代的端口／掛載，防止 HTTP 仍依賴 TLS。"""
+
+class ComposeLoader(yaml.SafeLoader):
+    """只額外接受專案 HTTP 覆蓋檔使用的 Compose 標記。"""
+
+ComposeLoader.add_constructor('!override', lambda loader, node: ReplaceList(loader.construct_sequence(node, deep=True)))
+http_override = yaml.load((ROOT / 'deploy/compose.http.yml').read_text(), Loader=ComposeLoader)
+assert set(http_override) == {'services'}
+assert set(http_override['services']) == {'public-web', 'admin-api', 'gateway'}
+http_web = http_override['services']['public-web']
+assert set(http_web) == {'ports', 'volumes'}, 'HTTP 必須沿用原映像、內網及權限設定'
+assert isinstance(http_web['ports'], ReplaceList) and http_web['ports'] == ['0.0.0.0:80:8080']
+assert isinstance(http_web['volumes'], ReplaceList)
+assert http_web['volumes'] == [web['volumes'][0], {
+    'type': 'bind', 'source': '../public_frontend/nginx-http.conf', 'target': '/etc/nginx/transport.conf',
+    'read_only': True, 'bind': {'create_host_path': False}}]
+assert all(http_override['services'][name] == {'profiles': ['https-admin']} for name in ('admin-api', 'gateway'))
 for config in (proxy, nginx):
     for name in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
         assert f'{name}_temp_path /tmp/' in config
@@ -170,6 +200,8 @@ assert build_ignore.index('dist/**') > build_ignore.index('!dist/')
 assert {line for line in build_ignore if line.startswith('!dist/')} == {
     '!dist/', '!dist/lab.html', '!dist/lab.js', '!dist/api.js', '!dist/lab.css', '!dist/gold.css'}
 public_docker = (ROOT / 'public_frontend/Dockerfile').read_text()
+assert 'COPY nginx-https.conf /etc/nginx/transport.conf' in public_docker
+assert '!nginx-https.conf' in build_ignore
 assert 'COPY dist/ ' not in public_docker and 'COPY . ' not in public_docker
 assert 'lab.json' not in public_docker and 'COPY dist/assets' not in public_docker
 for source in (ROOT / 'scripts').glob('*.py'):
