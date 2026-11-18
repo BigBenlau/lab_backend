@@ -1,4 +1,5 @@
 """合成首次來源→CSV→SQLite→公開檔案；不讀真正初始化資料，不啟動服務。"""
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -9,7 +10,7 @@ from lab_backend.cli import backup, import_csv
 from lab_backend.store import Store, StoreError
 from scripts.maintenance import (backup_static, check_files, install_public,
                                  load_site, restore_static)
-from scripts.prepare_initial_data import convert, prepare
+from scripts.prepare_initial_data import convert, main, prepare
 
 
 def seed():
@@ -52,6 +53,81 @@ class InitialDataTests(unittest.TestCase):
     def save_source(self):
         """只在暫存目錄建立同名合成 JSON。"""
         (self.source / 'data/lab.json').write_text(json.dumps(self.snapshot))
+
+    def run_seed(self, apply=False):
+        """直接呼叫CLI入口並捕捉輸出，不呼叫Docker、不使用真實來源。"""
+        stdout, stderr = io.StringIO(), io.StringIO()
+        args = ['seed', '--source', str(self.source), '--output', str(self.output)]
+        if apply:
+            args.append('--apply')
+        with patch('sys.argv', args), patch('sys.stdout', stdout), patch('sys.stderr', stderr):
+            result = main()
+        return result, stdout.getvalue(), stderr.getvalue()
+
+    def assert_failure(self, code, *, private='DO_NOT_LOG_PRIVATE', apply=False):
+        """失敗只提供固定分類，不在stdout冒充成功，也不回顯來源內容。"""
+        result, stdout, stderr = self.run_seed(apply)
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout, '')
+        self.assertIn('code=' + code, stderr)
+        self.assertIn('hint=', stderr)
+        self.assertNotIn(private, stderr)
+        self.assertNotIn(str(self.root), stderr)
+        self.assertNotIn('Traceback', stderr)
+
+    def test_diagnostics_distinguish_existing_output_and_missing_json(self):
+        """預覽／套用均不能覆寫既有bundle，缺來源也不能搜尋其他lab.json。"""
+        self.output.mkdir()
+        marker = self.output / 'keep'
+        marker.write_text('DO_NOT_LOG_PRIVATE')
+        for apply in (False, True):
+            self.assert_failure('output_exists', apply=apply)
+            self.assertEqual(marker.read_text(), 'DO_NOT_LOG_PRIVATE')
+        marker.unlink(); self.output.rmdir()
+        (self.source / 'data/lab.json').unlink()
+        (self.root / 'lab.json').write_text('DO_NOT_LOG_PRIVATE')
+        for apply in (False, True):
+            self.assert_failure('source_json_unavailable', apply=apply)
+            self.assertFalse(self.output.exists())
+
+    def test_conversion_diagnostics_do_not_echo_names_references_or_bad_dates(self):
+        cases = []
+        raw = seed(); raw['people'][0]['name'] = 'DO_NOT_LOG_PRIVATE'; cases.append((raw, 'person_name_mismatch'))
+        raw = seed(); raw['people'][0]['state'] = 'member'; cases.append((raw, 'person_membership_mismatch'))
+        raw = seed(); raw['publications'][0]['pdfUrl'] = 'DO_NOT_LOG_PRIVATE'; cases.append((raw, 'publication_link_unconverted'))
+        raw = seed(); raw['publications'][0]['authors'][0]['personId'] = 'DO_NOT_LOG_PRIVATE'; cases.append((raw, 'author_reference_invalid'))
+        for date in ('DO_NOT_LOG_PRIVATE', '2020-01-01T00:00:00'):
+            raw = seed(); raw['people'][0]['publishedAt'] = date; cases.append((raw, 'published_at_invalid'))
+        for raw, code in cases:
+            with self.subTest(code=code):
+                self.snapshot = raw; self.save_source()
+                self.assert_failure(code)
+                self.assert_failure(code, apply=True)
+                self.assertFalse(self.output.exists())
+
+    def test_asset_diagnostics_preserve_rejection_of_unsupported_missing_and_symlink_files(self):
+        unexpected = self.source / 'assets/.DS_Store'
+        unexpected.write_text('DO_NOT_LOG_PRIVATE')
+        self.assert_failure('asset_type_unsupported', apply=True)
+        unexpected.unlink()
+        self.snapshot['assets'][1]['url'] = '/assets/DO_NOT_LOG_PRIVATE.svg'
+        self.save_source()
+        self.assert_failure('asset_file_unavailable', apply=True)
+        link = self.source / 'assets/DO_NOT_LOG_PRIVATE.svg'
+        link.symlink_to(self.source / 'assets/logo.svg')
+        self.assert_failure('symlink_not_allowed', apply=True)
+        self.assertFalse(self.output.exists())
+
+    def test_validation_json_and_unknown_errors_do_not_leak_values(self):
+        self.snapshot['people'][0]['bioMarkdown'] = 'DO_NOT_LOG_PRIVATE' * 4000
+        self.save_source()
+        self.assert_failure('content_validation_failed')
+        (self.source / 'data/lab.json').write_text('{"DO_NOT_LOG_PRIVATE":')
+        self.assert_failure('json_syntax_invalid')
+        with patch('scripts.prepare_initial_data.prepare', side_effect=ValueError('DO_NOT_LOG_PRIVATE')):
+            self.assert_failure('unclassified_error')
+        with patch('scripts.prepare_initial_data.prepare', side_effect=PermissionError('DO_NOT_LOG_PRIVATE')):
+            self.assert_failure('permission_denied')
 
     def test_preview_apply_import_and_runtime_is_independent_of_seed(self):
         self.assertFalse(prepare(self.source, self.output)['applied'])
