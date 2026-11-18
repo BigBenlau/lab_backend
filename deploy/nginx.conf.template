@@ -10,6 +10,11 @@ http {
     access_log /dev/stdout minimal;
     client_body_temp_path /tmp/client;
     proxy_temp_path /tmp/proxy;
+    # 即使未使用 FastCGI 等上游，模組初始化也不能寫唯讀的 /var/cache。
+    fastcgi_temp_path /tmp/fastcgi;
+    uwsgi_temp_path /tmp/uwsgi;
+    scgi_temp_path /tmp/scgi;
+    proxy_max_temp_file_size 0;
     client_max_body_size 256k;
     client_body_timeout 10s;
     client_header_timeout 10s;

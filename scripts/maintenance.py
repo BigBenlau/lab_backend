@@ -18,12 +18,136 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lab_backend.cli import atomic_json, backup_job, backup_state, content_hash, file_hash
 from lab_backend.config import Config
-from lab_backend.models import now
+from pydantic import Field
+from lab_backend.models import Id, Link, Model, Short, now
 from lab_backend.store import Store, exclusive_lock, json_loads, read_file, sync_dir, write_new
 
 MAX_STATIC_FILE = 256 * 1024 * 1024
 MAX_STATIC_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_STATIC_FILES = 10000
+MAX_SITE_FILE = 1024 * 1024
+STATIC_SUFFIXES = {'.svg', '.png', '.jpg', '.jpeg', '.webp', '.pdf'}
+
+
+class SiteSettings(Model):
+    """固定頁面文字的白名單；不保存成員、論文及管理設定。"""
+    name: Short
+    fullName: Short = ''
+    institution: Short = ''
+    introduction: str = ''
+    aboutMarkdown: str = ''
+    recruitmentMarkdown: str = ''
+    recruitmentUrl: str | None = None
+    publicationArchiveUrl: str | None = None
+    publicEmail: Short | None = None
+    contactName: Short = ''
+    links: list[Link] = Field(default_factory=list, max_length=30)
+    logoAssetId: Id | None = None
+    wordmarkAssetId: Id | None = None
+
+
+class BrandAsset(Model):
+    """固定品牌圖只需網址與替代文字；相簿和個人照片由 SQLite 提供。"""
+    id: Id
+    url: str
+    alt: Short = ''
+
+
+class Opportunity(Model):
+    """保留既有聯絡頁用到的固定招募文字，不新增招募 API 或資料表。"""
+    title: Short
+    bodyMarkdown: str = ''
+    requirements: list[Short] = Field(default_factory=list, max_length=100)
+    applicationChecklist: list[Short] = Field(default_factory=list, max_length=100)
+    applicationUrl: str | None = None
+    guidanceUrl: str | None = None
+    availability: Short = 'open'
+    deadlineAt: Short | None = None
+
+
+class Site(Model):
+    """公開 site.json 的完整形狀；未知欄位一律拒絕，防止整庫快照誤發布。"""
+    siteSettings: SiteSettings
+    assets: list[BrandAsset] = Field(default_factory=list, max_length=2)
+    opportunities: list[Opportunity] = Field(default_factory=list, max_length=100)
+
+
+def load_site(root):
+    """有界讀取固定設定，不能追隨符號連結或夾帶不明欄位。"""
+    path = checked_file(root, 'site.json')
+    with path.open('rb') as handle:
+        raw = handle.read(MAX_SITE_FILE + 1)
+    if len(raw) > MAX_SITE_FILE:
+        raise ValueError('site.json 容量超限')
+    return Site.model_validate(json_loads(raw.decode())).model_dump()
+
+
+def check_site(root, site, rows):
+    """同時驗證固定設定與 SQLite／CSV 的本地檔案關聯，外站不下載。"""
+    site = Site.model_validate(site).model_dump()
+    if len(json.dumps(site, ensure_ascii=False).encode()) > MAX_SITE_FILE:
+        raise ValueError('site.json 容量超限')
+    ids = {asset['id'] for asset in site['assets']}
+    if len(ids) != len(site['assets']) or any(site['siteSettings'][key] not in ids | {None}
+                                           for key in ('logoAssetId', 'wordmarkAssetId')):
+        raise ValueError('固定品牌圖關聯無效')
+    links = [a['url'] for a in site['assets']] + content_links(rows)
+    for value in links:
+        relative = local_asset(value)
+        if relative is not None:
+            if Path(relative).suffix.lower() not in STATIC_SUFFIXES:
+                raise ValueError('不支援的公開檔案型別')
+            checked_file(root, relative)
+
+
+def content_links(state):
+    """SQLite、首次轉換及缺檔檢查共用三類內容的檔案引用規則。"""
+    return ([a['url'] for a in state['assets']]
+            + [p['portrait']['url'] for p in state['people'] if p['portrait']]
+            + [p['pdfPath'] for p in state['publications'] if p['pdfPath']])
+
+
+def copy_public(root, target, files):
+    """複製已驗證清單，串流限額、拒絕 symlink，並檢查來源沒有在複製中改動。"""
+    target.mkdir(mode=0o700)
+    (target / 'assets').mkdir(mode=0o700)
+    total = 0
+    for path, relative in files:
+        checked_file(root, relative)
+        output = target / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as source, output.open('xb') as dest:
+            before = os.fstat(source.fileno())
+            info = copy_and_hash(source, dest, limit=min(MAX_STATIC_FILE, MAX_STATIC_TOTAL - total))
+            after = os.fstat(source.fileno())
+            if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                raise ValueError('複製期間來源被修改')
+            total += info['size']
+            dest.flush(); os.fsync(dest.fileno())
+
+
+def install_public(store, source, apply=False):
+    """首次檔案安裝：先匯入 CSV 再驗引用；拒絕覆寫執行目錄，所有服務須停止。"""
+    with store.maintenance():
+        target = store.root / 'public'
+        if target.exists() or target.is_symlink() or source.is_symlink():
+            raise ValueError('只允許首次安裝到不存在的 public 目錄')
+        root = source.resolve(strict=True)
+        check_site(root, load_site(root), store.read())
+        files = static_files(root)
+        if apply:
+            pending = store.root / ('.public-' + uuid.uuid4().hex)
+            try:
+                copy_public(root, pending, files)
+                check_site(pending, load_site(pending), store.read())
+                for folder, _, _ in os.walk(pending, topdown=False):
+                    sync_dir(Path(folder))
+                pending.rename(target)
+                sync_dir(store.root)
+            finally:
+                if pending.exists():
+                    shutil.rmtree(pending)
+        return {'files': len(files), 'applied': apply}
 
 
 def copy_and_hash(source, target=None, *, limit):
@@ -67,10 +191,16 @@ def check_files(store, web_root):
     """離線查SQLite中的本地圖片／PDF；外部URL只列為未驗證，不發送請求。"""
     root = web_root.resolve(strict=True)
     state = store.read()
-    links = [a['url'] for a in state['assets']]
-    links += [p['portrait']['url'] for p in state['people'] if p['portrait']]
-    links += [p['pdfPath'] for p in state['publications'] if p['pdfPath']]
+    links = content_links(state)
     missing, external, checked = [], 0, 0
+    if (root / 'site.json').exists() or (root / 'site.json').is_symlink():
+        site = load_site(root)
+        links += [a['url'] for a in site['assets']]
+        ids = {a['id'] for a in site['assets']}
+        if any(site['siteSettings'][key] not in ids | {None} for key in ('logoAssetId', 'wordmarkAssetId')):
+            raise ValueError('固定品牌圖關聯無效')
+    else:
+        missing.append('site.json')
     for value in dict.fromkeys(links):
         relative = local_asset(value)
         if relative is None:
@@ -84,8 +214,8 @@ def check_files(store, web_root):
     return {'ok': not missing, 'checked': checked, 'externalUnchecked': external, 'missing': missing}
 
 
-def static_files(web_root):
-    """只遍歷網站assets目錄，避免把參考JSON、程式庫或機密打入檔案備份。"""
+def static_files(web_root, *, include_site=True):
+    """只列 assets 與白名單 site.json；原始 data、程式及私人參考不入備份。"""
     root = web_root.resolve(strict=True)
     folder = root / 'assets'
     if folder.is_symlink() or not folder.is_dir():
@@ -99,11 +229,19 @@ def static_files(web_root):
             path = Path(current) / name
             if not path.is_file():
                 raise ValueError('只允許普通靜態檔案')
+            if path.suffix.lower() not in STATIC_SUFFIXES:
+                raise ValueError('assets 只接受圖片及 PDF')
             size = path.stat().st_size
             total += size
             if size > MAX_STATIC_FILE or total > MAX_STATIC_TOTAL or len(files) >= MAX_STATIC_FILES:
                 raise ValueError('靜態備份容量超限')
             files.append((path, path.relative_to(root).as_posix()))
+    if include_site:
+        site = load_site(root)
+        check_site(root, site, {'assets': [], 'people': [], 'publications': []})
+        if len(files) >= MAX_STATIC_FILES or total + (root / 'site.json').stat().st_size > MAX_STATIC_TOTAL:
+            raise ValueError('靜態備份容量超限')
+        files.append((root / 'site.json', 'site.json'))
     return sorted(files, key=lambda item: item[1])
 
 
@@ -159,6 +297,8 @@ def verify_static(archive_path, database_backup):
         names = [entry.filename for entry in entries]
         if len(names) != len(set(names)) or len(names) > MAX_STATIC_FILES + 1:
             raise ValueError('靜態備份檔案清單無效')
+        if 'site.json' not in names:
+            raise ValueError('靜態備份缺少固定設定')
         if archive.getinfo('manifest.json').file_size > 4 * 1024 * 1024:
             raise ValueError('manifest過大')
         manifest = json_loads(archive.read('manifest.json').decode())
@@ -170,7 +310,7 @@ def verify_static(archive_path, database_backup):
         total = 0
         for item in files:
             relative = item['path']
-            if local_asset('/' + relative) != relative:
+            if relative != 'site.json' and (local_asset('/' + relative) != relative or Path(relative).suffix.lower() not in STATIC_SUFFIXES):
                 raise ValueError('備份路徑無效')
             info = archive.getinfo(relative)
             if info.file_size > MAX_STATIC_FILE or stat.S_ISLNK(info.external_attr >> 16):
@@ -180,6 +320,10 @@ def verify_static(archive_path, database_backup):
             total += actual['size']
             if actual != {key: item[key] for key in actual}:
                 raise ValueError('靜態備份指紋不符')
+            if relative == 'site.json':
+                if actual['size'] > MAX_SITE_FILE:
+                    raise ValueError('site.json 容量超限')
+                Site.model_validate(json_loads(archive.read(relative).decode()))
     return manifest
 
 
@@ -280,6 +424,8 @@ def main():
     """明確指定離線操作；不讀取lab.json，錯誤只回類型避免輸出秘密。"""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    install = sub.add_parser('install-public')
+    install.add_argument('source', type=Path); install.add_argument('--apply', action='store_true')
     check = sub.add_parser('check-files'); check.add_argument('web_root', type=Path)
     bak = sub.add_parser('backup-static')
     bak.add_argument('web_root', type=Path); bak.add_argument('output', type=Path)
@@ -295,7 +441,8 @@ def main():
     config = Config.load()
     store = Store(config.storage)
     try:
-        if args.command == 'check-files': result = check_files(store, args.web_root)
+        if args.command == 'install-public': result = install_public(store, args.source, args.apply)
+        elif args.command == 'check-files': result = check_files(store, args.web_root)
         elif args.command == 'backup-static':
             manifest = backup_static(store, args.web_root, args.output, args.version, args.database_backup)
             result = {'ok': True, 'version': manifest['version'], 'files': len(manifest['files'])}

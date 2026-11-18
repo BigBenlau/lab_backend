@@ -24,7 +24,7 @@ created／updated／_version由系統維護，不屬於可寫data；公開不輸
 | `created` | TEXT（JSON） | 否 | ChangeStamp {at:string,by:string} | `系統產生` | 建立時間及操作者；由伺服器維護，管理回應外層同名欄位 |
 | `updated` | TEXT（JSON） | 否 | ChangeStamp {at:string,by:string} | `系統產生` | 最後更新時間及操作者；由伺服器維護，管理回應外層同名欄位 |
 | `id` | TEXT PK | 否 | string（字元≥1,字元≤200） | `必填` | 穩定識別鍵；同表唯一，建立後不可改 |
-| `url` | TEXT | 否 | string（字元≥1,字元≤2048） | `必填` | 資產網址／資產相對路徑；不代管實體檔案 |
+| `url` | TEXT | 否 | string（字元≥1,字元≤2048） | `必填` | 資產網址／資產相對路徑；實體檔另存volume的public/assets |
 | `metadata` | TEXT（JSON） | 否 | AssetMetadata {mimeType,alt,caption,credit,purpose} | `圖片預設描述物件` | 集中保存資產描述，不含width／height |
 | `_version` | INTEGER | 否 | integer ≥1 | `1` | 內容編輯版本；初始1，每次成功 PUT 加一；回應為外層 version |
 
@@ -119,8 +119,8 @@ publicationIds只在管理回應展示，公開詳情直接回publications而不
 
 ## PDF與容量
 
-pdfPath為null或同源`/assets/papers/paper-1.pdf`。長度1–2048，目錄僅英數／底線／連字號，檔名以這些字元開頭、其餘可加點，PDF副檔名不分大小寫。拒絕外站、./assets/、空字串、空格、百分號、query、fragment、反斜線及..目錄。官網提供實體檔案；API不讀主機路徑、不上傳或代理下載。
+pdfPath為null或同源`/assets/papers/paper-1.pdf`。長度1–2048，目錄僅英數／底線／連字號，檔名以這些字元開頭、其餘可加點，PDF副檔名不分大小寫。拒絕外站、./assets/、空字串、空格、百分號、query、fragment、反斜線及..目錄。實體檔案存volume的public/assets，由官網Nginx唯讀提供；API不讀主機路徑、不上傳或代理下載。
 
 30人／300篇是估算，不限兩者總筆數；assets/users各1000筆保護。每表解碼JSON與備份CSV各≤32MiB；單筆業務JSON≤252KiB，預留4KiB給HTTP包裝。API、CSV預覽／套用、初始化、恢復共用容量驗證，超限不提交。audit可分頁及串流封存，完整備份超限時先封存歷史。
 
-SQLite10／LABSQL10不隱式遷移舊資料。init只建空庫，lab.json僅為私人參考；一般CSV只新增三類內容，帳戶／審計只在完整備份內。編碼、缺檔檢查及備份步驟見[OPERATIONS](OPERATIONS.md)。
+SQLite10／LABSQL10不隱式遷移舊資料。init只建空庫，根目錄lab.json僅為私人參考；明確seed可把指定前端首次來源轉成三類CSV，再由同一匯入器新增。public/site.json僅保存固定頁面設定，不增加SQLite表或複製成員／論文；一般CSV只新增三類內容，帳戶／審計只在完整備份內。編碼、缺檔檢查及備份步驟見[OPERATIONS](OPERATIONS.md)。

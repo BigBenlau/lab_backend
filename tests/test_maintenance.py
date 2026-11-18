@@ -90,6 +90,7 @@ class MaintenanceTests(unittest.TestCase):
         self.web = self.root / 'web'
         (self.web / 'assets').mkdir(parents=True)
         (self.web / 'assets/logo.svg').write_text('<svg/>')
+        (self.web / 'site.json').write_text(json.dumps({'siteSettings': {'name': 'Synthetic Lab'}}))
 
     def test_capacity_rejection_leaves_content_and_audit_editable(self):
         """縮小門檻重現跨界寫入，不配置真實32MiB；失敗後仍能讀取與刪除。"""

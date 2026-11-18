@@ -1,4 +1,4 @@
-// 程序內 API／渲染替身檢查，不啟動伺服器或瀏覽器。
+// 程序內 API／DOM 替身；直接執行正式頁面函式，不開瀏覽器或 HTTP listener。
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -7,107 +7,164 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'public_frontend/dist/api.js'), 'utf8');
 const api = import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-
-function response(body, status = 200, type = 'application/json') {
+const base = () => ({siteSettings: {name: 'Synthetic Lab', fullName: 'Example Lab', institution: 'Example', links: []}, assets: [], opportunities: []});
+const person = changes => ({id: 'amy', name: 'An Example', familyName: 'Example', givenName: 'An', englishName: 'Avery', title: 'Student', portrait: null, memberships: [{role: 'student', isCurrent: true}], alumniSince: null, ...changes});
+const paper = (id, year=2026) => ({id, title: id, year, type: 'journal', venue: {name: 'Synthetic Venue', shortName: 'SV'}, authors: [{personId: 'amy', name: 'Exact signature'}, {personId: null, name: 'External'}], sourceUrl: 'https://example.invalid/paper', pdfPath: null});
+function response(body, status=200, type='application/json') {
   return {ok: status === 200, status, headers: {get: () => type}, json: async () => body};
 }
 
-test('四個頁面各只呼叫指定API，成員詳情不額外取全體資料', async t => {
-  const {readPage} = await api;
-  const cases = [
-    ['home', undefined, '/api/home', {assets: [], recentPublications: [], counts: {publications: 4}}, {assets: [], publications: [], counts: {publications: 4}}],
-    ['member', undefined, '/api/people', [{id: 'p1'}], {people: [{id: 'p1'}]}],
-    ['member', 'p1', '/api/people/p1', {person: {id: 'p1'}, publications: [{id: 'paper'}]}, {people: [{id: 'p1'}], publications: [{id: 'paper'}]}],
-    ['publications', undefined, '/api/publications', [{id: 'paper'}], {publications: [{id: 'paper'}]}],
-  ];
-  for (const [page, id, url, body, expected] of cases) {
-    const calls = [];
-    t.mock.method(globalThis, 'fetch', async (target, options) => { calls.push({target, options}); return response(body); });
-    assert.deepEqual(await readPage(page, id), expected);
+// DOM 替身只提供頁面使用的介面；回傳的 HTML 仍由真實 lab.js 產生。
+async function renderers() {
+  const adapter = await api;
+  const elements = new Map();
+  const element = selector => {
+    if (!elements.has(selector)) elements.set(selector, {
+      value: '', innerHTML: '', textContent: '', dataset: {}, style: {},
+      addEventListener() {}, setAttribute() {}, removeAttribute() {}, focus() {}, scrollIntoView() {},
+      querySelector: key => element(selector + ' ' + key), querySelectorAll: () => [],
+      classList: {remove() {}, toggle() {return false;}},
+    });
+    return elements.get(selector);
+  };
+  const document = {querySelector: element, getElementById: id => element('#' + id), querySelectorAll: () => [], documentElement: {dataset: {}}, body: {style: {}}};
+  const context = vm.createContext({...adapter, document, URL, URLSearchParams, Intl, Date, console,
+    localStorage: {getItem() {}, setItem() {}}, location: {hash: '#home'}, history: {replaceState() {}},
+    window: {addEventListener() {}, scrollTo() {}}, navigator: {clipboard: {writeText: async () => {}}}});
+  let code = fs.readFileSync(path.join(root, 'public_frontend/dist/lab.js'), 'utf8').replace(/^import .*;\n/gm, '').replace(/\nstart\(\);\s*$/, '');
+  vm.runInContext(code + '\nglobalThis.render={paperActions,paperLink,image,authors,photoStack,memberLink,home,people,publications,route,start,setData(value){data=baseData=value;}};', context);
+  context.render.setData({...base(), people: [], publications: []});
+  return {render: context.render, element, context};
+}
+
+test('四個頁面各只呼叫指定API；不添加私人憑證或快取', async t => {
+  const {readPage, readSettings} = await api;
+  const cases = [ ['home', undefined, '/api/home'], ['member', undefined, '/api/people'],
+    ['member', 'amy', '/api/people/amy'], ['publications', undefined, '/api/publications'] ];
+  for (const [page, id, url] of cases) {
+    const calls = [], body = {synthetic: true};
+    t.mock.method(globalThis, 'fetch', async (target, options) => {calls.push({target, options}); return response(body);});
+    assert.deepEqual(await readPage(page, id), body);
     assert.equal(calls.length, 1); assert.equal(calls[0].target, url);
     assert.equal(calls[0].options.credentials, 'omit'); assert.equal(calls[0].options.cache, 'no-store');
     t.mock.restoreAll();
   }
+  t.mock.method(globalThis, 'fetch', async url => {assert.equal(url, '/data/site.json'); return response(base());});
+  assert.deepEqual(await readSettings(), base());
 });
 
-test('讀取失敗或HTML回應拋錯，不回退lab.json或空陣列', async t => {
+test('API失敗或HTML回應報錯，不回退lab.json或空陣列', async t => {
   const {readPage} = await api;
   for (const result of [response(null, 503), response(null, 200, 'text/html')]) {
     let calls = 0;
-    t.mock.method(globalThis, 'fetch', async () => { calls++; return result; });
+    t.mock.method(globalThis, 'fetch', async () => {calls++; return result;});
     await assert.rejects(readPage('home')); assert.equal(calls, 1); t.mock.restoreAll();
   }
 });
 
-test('固定頁面不請求內容庫，ID只進入編碼的路徑', async t => {
+test('聯絡頁不用內容API；相簿讀home；無效ID不發送請求，404回找不到', async t => {
   const {readPage} = await api;
   const calls = [];
-  t.mock.method(globalThis, 'fetch', async url => {calls.push(url); return response({person: {}, publications: []});});
-  assert.deepEqual(await readPage('contact'), {}); assert.deepEqual(await readPage('news'), {});
+  t.mock.method(globalThis, 'fetch', async url => {calls.push(url); return response(null, 404);});
+  assert.equal(readPage('contact'), undefined);
+  for (const id of ['bad/id', '../private', 'amy\n']) assert.equal(readPage('member', id), null);
   assert.equal(calls.length, 0);
-  await readPage('member', 'bad/id'); assert.deepEqual(calls, ['/api/people/bad%2Fid']);
+  assert.equal(await readPage('member', 'missing'), null);
+  await assert.rejects(readPage('news'));
+  assert.deepEqual(calls, ['/api/people/missing', '/api/home']);
 });
 
-test('PDF路徑僅允許同源assets下檔案', async () => {
+test('PDF僅允許同源assets路徑且產生download連結', async () => {
   const {pdfPath} = await api;
-  for (const path of ['/assets/paper.pdf', '/assets/papers/paper-1.PDF']) assert.equal(pdfPath(path), path);
-  for (const path of [null, '', '//evil/p.pdf', 'https://evil/p.pdf', '/etc/passwd', '/assets/../secret.pdf', '/assets/%2e%2e/p.pdf', '/assets/a.pdf?x=1', '/assets/a.pdf#x', '/assets/a.png', '/assets/a.pdf\n']) assert.equal(pdfPath(path), '');
+  const {render} = await renderers();
+  for (const value of ['/assets/paper.pdf', '/assets/papers/paper-1.PDF']) {
+    assert.equal(pdfPath(value), value);
+    assert.match(render.paperActions({pdfPath: value}), / download>Download PDF/);
+  }
+  for (const value of [null, '', '//evil/p.pdf', 'https://evil/p.pdf', '/etc/passwd', '/assets/../secret.pdf', '/assets/%2e%2e/p.pdf', '/assets/a.pdf?x=1', '/assets/a.pdf#x', '/assets/a.png', '/assets/a.pdf\n']) {
+    assert.equal(pdfPath(value), '');
+    assert.doesNotMatch(render.paperActions({pdfPath: value}), /Download PDF/);
+  }
+  assert.match(render.paperActions(paper('a')), /href="https:\/\/example.invalid\/paper"/);
 });
 
-// 執行原始渲染函式，確定不是僅驗證一份仿製HTML。
-async function renderers() {
-  const {pdfPath} = await api;
-  let code = fs.readFileSync(path.join(root, 'public_frontend/dist/lab.js'), 'utf8');
-  code = code.slice(0, code.indexOf('function home()')).replace(/^import .*;\n/gm, '');
-  const context = vm.createContext({document: {querySelector: () => ({})}, URL, pdfPath});
-  vm.runInContext(code + '\nglobalThis.render={paperActions,paperLink,image,authors,photoStack,memberName,memberLink,setData(value){data=value;}};', context);
-  context.render.setData({assets: [], people: []});
-  return context.render;
-}
-
-test('論文有pdfPath才產生同源download連結', async () => {
-  const render = await renderers();
-  assert.match(render.paperActions({pdfPath: '/assets/papers/a.pdf'}), /href="\/assets\/papers\/a.pdf" download>Download PDF/);
-  for (const pdfPath of [null, 'javascript:alert(1)', 'https://evil/a.pdf']) assert.doesNotMatch(render.paperActions({pdfPath}), /Download PDF/);
-});
-
-test('照片讀metadata且文字跳脫；作者無需成員列表即可建立詳情連結', async () => {
-  const render = await renderers();
-  const html = render.image({url: '/assets/a.jpg', metadata: {alt: '<name>'}});
-  assert.match(html, /alt="&lt;name&gt;"/); assert.doesNotMatch(html, /width=|height=/);
+test('照片metadata與署名跳脫；不需全體成員即可生成作者連結', async () => {
+  const {pageData} = await api, {render} = await renderers();
+  const row = person({portrait: {url: '/assets/合照.jpg', metadata: {alt: '<name>'}}});
+  const data = pageData(base(), 'member', undefined, [row]); render.setData(data);
+  const html = render.image(data.people[0].portraitAssetId);
+  assert.match(html, /alt="&lt;name&gt;"/); assert.match(html, /\/assets\/合照.jpg/);
+  assert.doesNotMatch(html, /width=|height=/);
+  render.setData({...base(), people: [], publications: []});
   assert.match(render.paperLink({pageUrl: '#publications/PAPER_1', title: 'Paper'}), /href="#publications\/PAPER_1"/);
   const authors = render.authors({authors: [{name: '<Author>', personId: 'amy'}, {name: 'External', personId: null}]});
   assert.match(authors, /href="#member\/amy"/); assert.match(authors, /&lt;Author&gt;/); assert.match(authors, /External/);
-});
-
-test('成員論文及論文物件保留API入庫倒序，不按年份重排', async () => {
-  const source = fs.readFileSync(path.join(root, 'public_frontend/dist/models.js'), 'utf8');
-  const {Member, Paper} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-  const person = new Member({id: 'person'});
-  const papers = [
-    {id: 'new', year: 2020, authors: [{personId: 'person'}]},
-    {id: 'old', year: 2026, authors: [{personId: 'person'}]},
-  ].map(p => new Paper(p));
-  assert.deepEqual(person.getPapers(papers).map(p => p.id), ['new', 'old']);
-  assert.equal(papers[0].pageUrl, '#publications/new');
-});
-
-test('首頁相簿使用全部API合照；英文名可留空且不覆寫署名', async () => {
-  const render = await renderers();
-  render.setData({assets: [
-    {id: 'new-a', url: '/assets/合照.jpg', metadata: {alt: 'Group A'}},
-    {id: 'new-b', url: '/assets/group-b.jpg', metadata: {alt: 'Group B'}},
-  ]});
-  const photos = render.photoStack();
-  assert.match(photos, /\/assets\/合照.jpg/);
-  assert.match(photos, /\/assets\/group-b.jpg/);
-  assert.match(photos, /1 \/ 2/);
-  const person = {id: 'person', name: 'An Example', englishName: 'Avery'};
-  assert.equal(render.memberName(person), 'An Example (Avery)');
-  assert.match(render.memberLink(person), /An Example \(Avery\)/);
-  for (const englishName of [null, '', '   ']) assert.equal(render.memberName({...person, englishName}), 'An Example');
-  assert.match(render.authors({authors: [{personId: 'person', name: 'Exact signature'}]}), />Exact signature<\/a>/);
   for (const url of ['/assets/../secret.jpg', '/assets/%2e%2e/secret.jpg', '//evil/a.jpg', 'javascript:alert(1)', 'https://name:password@example.invalid/a.jpg']) {
-    assert.equal(render.image({url, metadata: {alt: ''}}), '');
+    render.setData({...base(), assets: [{id: 'unsafe', url, alt: ''}]});
+    assert.equal(render.image('unsafe'), '');
   }
+});
+
+test('個人頁與列表維持論文入庫倒序，old選項只反轉順序', async () => {
+  const {pageData} = await api, {render, element} = await renderers();
+  const papers = [paper('new', 2020), paper('old', 2026)];
+  const detail = pageData(base(), 'member', 'amy', {person: person(), publications: papers});
+  assert.deepEqual(detail.publications.map(p => p.id), ['new', 'old']);
+  render.setData(detail); render.people('amy');
+  const html = element('#content').innerHTML;
+  assert.ok(html.indexOf('>new</a>') < html.indexOf('>old</a>'));
+  render.setData(pageData(base(), 'publications', undefined, papers));
+  render.publications(undefined, new URLSearchParams());
+  let list = element('#paper-results').innerHTML;
+  assert.ok(list.indexOf('>new</a>') < list.indexOf('>old</a>'));
+  render.publications(undefined, new URLSearchParams('sort=old'));
+  list = element('#paper-results').innerHTML;
+  assert.ok(list.indexOf('>old</a>') < list.indexOf('>new</a>'));
+});
+
+test('首頁顯示全部合照和API前三篇，英文名可空且不改作者署名', async () => {
+  const {pageData} = await api, {render, element} = await renderers();
+  render.setData(pageData(base(), 'home', undefined, {
+    assets: [{id: 'a', url: '/assets/合照.jpg', metadata: {alt: 'Group A'}}, {id: 'b', url: '/assets/b.jpg', metadata: {alt: 'Group B'}}],
+    recentPublications: [paper('third'), paper('second'), paper('first')], counts: {publications: 55},
+  }));
+  render.home(); const html = element('#content').innerHTML;
+  assert.match(html, /\/assets\/合照.jpg/); assert.match(html, /\/assets\/b.jpg/);
+  assert.match(html, /1 \/ 2/); assert.match(html, /View all 55 publications/);
+  assert.ok(html.indexOf('>third</a>') < html.indexOf('>second</a>'));
+  for (const englishName of ['Avery', null, '', '   ']) {
+    const data = pageData(base(), 'member', undefined, [person({englishName})]); render.setData(data);
+    assert.equal(data.people[0].name, englishName === 'Avery' ? 'An Example (Avery)' : 'An Example');
+    assert.match(render.authors(paper('a')), />Exact signature<\/a>/);
+  }
+});
+
+test('校友年月在列表和個人頁一致；空身份不誤判校友；保留API人名排序', async () => {
+  const {pageData} = await api, {render, element} = await renderers();
+  const alum = person({memberships: [{role: 'student', isCurrent: false}], alumniSince: '2025-06'});
+  const unclassified = person({id: 'new-person', memberships: [], englishName: null});
+  const data = pageData(base(), 'member', undefined, [alum, unclassified]); render.setData(data);
+  assert.deepEqual(data.people.map(p => p.state), ['alumni', 'unclassified']);
+  assert.deepEqual(data.people.map(p => p.id), ['amy', 'new-person']);
+  render.people(); assert.match(element('#content').innerHTML, /datetime="2025-06">June 2025/);
+  assert.match(element('#content').innerHTML, /Other members/);
+  render.setData(pageData(base(), 'member', 'amy', {person: alum, publications: []}));
+  render.people('amy'); assert.match(element('#content').innerHTML, /datetime="2025-06">June 2025/);
+});
+
+test('啟動先讀固定設定，再讀home；換頁重新讀API且無原始快照fallback', async t => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    calls.push(url);
+    if (url === '/data/site.json') return response(base());
+    if (url === '/api/home') return response({assets: [], recentPublications: [], counts: {publications: 0}});
+    return response([person()]);
+  });
+  const {render, context} = await renderers(); await render.start();
+  assert.deepEqual(calls, ['/data/site.json', '/api/home']);
+  context.location.hash = '#member'; await render.route(); await render.route();
+  assert.deepEqual(calls.slice(2), ['/api/people', '/api/people']);
+  assert.ok(!calls.some(url => url.endsWith('lab.json')));
+  const page = fs.readFileSync(path.join(root, 'public_frontend/dist/lab.js'), 'utf8');
+  assert.doesNotMatch(page, /apiMode|data\/lab\.json|isDemo|publishState/);
 });

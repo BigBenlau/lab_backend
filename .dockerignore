@@ -7,7 +7,7 @@ storage
 secrets
 backups
 **/*.db*
-# 公開前端獨立建置，後端及管理入口不包含它的原始碼或 Git 資料。
+# 公開前端雖與後端共用Git倉庫，仍獨立建置；後端及管理映像不包含它。
 public_frontend
 
 # 真實參考資料與離線交換檔不得送進建置context。

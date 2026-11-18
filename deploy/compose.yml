@@ -25,6 +25,36 @@ x-api: &api
     options: {max-size: "10m", max-file: "3"}
 
 services:
+  public-web:
+    build:
+      context: ../public_frontend
+    image: lab-public-web:demo
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.5
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"]
+    ports: ["0.0.0.0:443:8443"]
+    networks: [public_edge, frontend_net]
+    volumes:
+      - type: volume
+        source: lab_data
+        target: /srv/public
+        read_only: true
+        volume: {subpath: public, nocopy: true}
+      - type: bind
+        source: ../secrets/public-tls
+        target: /run/tls
+        read_only: true
+        bind: {create_host_path: false}
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
   public-api:
     <<: *api
     environment:
@@ -102,11 +132,12 @@ services:
     healthcheck: {disable: true}
 
 volumes:
-  # 同一個 local volume 保存兩庫與 journal，維持 ATTACH 交易及原掛載路徑。
+  # 同一個 local volume 保存兩庫、journal 及公開檔案；公開服務只掛指定子目錄。
   lab_data:
     driver: local
 
 networks:
+  public_edge: {}
   # 公開前端的伺服器容器加入此網路；API 不發布宿主機 port。
   frontend_net:
     name: ${LAB_CONTENT_NETWORK:-lab-content}

@@ -10,19 +10,19 @@
 - 管理員帳密登入、帳戶啟停、版本衝突檢查及操作審計。
 - 離線CSV批量新增、缺檔檢查、資料庫與靜態檔配對備份、可用性告警。
 
-每次內容請求均讀SQLite。30位成員／300篇論文是性能規劃基準，並非筆數上限。資產只管理網址與描述，實體檔案由官網提供。
+每次內容請求均讀SQLite。30位成員／300篇論文是性能規劃基準，並非筆數上限。資產只管理網址與描述，實體檔案保存在後端管理的 volume，由官網 Nginx 唯讀提供。
 
 ## 結構
 
-`lab_backend/`包含八個Python功能模組；`admin_frontend/admin/`為管理頁；`deploy/`提供gateway、public-api、admin-api三個常駐容器。gateway提供HTTPS管理頁與API代理，管理端口可指定（預設27182）；兩API只走Docker內網。獨立官網使用443，管理來源IP由Cloud防火牆管理，後台使用帳密登入。
+`lab_backend/`包含八個Python功能模組；`admin_frontend/admin/`為管理頁；`deploy/`提供public-web、gateway、public-api、admin-api四個常駐容器。gateway提供HTTPS管理頁與API代理，管理端口可指定（預設27182）；兩API只走Docker內網。public-web使用Nginx提供官網443與四個同源API代理，管理來源IP由Cloud防火牆管理，後台使用帳密登入。
 
 SQLite保存在一個Docker named volume中：內容庫content.db保存assets、people、publications；管理庫admin.db保存users、audit，共5表47欄。公開API為4個GET，管理／登入為14個操作模板，按資源展開22個操作。
 
 Python與維護工具全部在容器內，VPS只需已有Docker、Compose及可用維護控制台，SSH不必公開。`sh deploy/lab.sh`統一建置、初始化與啟動；tools維護容器按需執行，亦可選擇常駐監測，不需主機Python或systemd。
 
-初始化只建立空庫，首位管理員由CLI建立，內容由管理介面或CSV匯入。`lab.json`是本地真實資料參考，不進Git、Docker或自動初始化流程。登入採Argon2與基本Session保護，完整正式登入安全另階段完善。
+初始化只建立空庫，首位管理員由CLI建立，內容由管理介面或CSV匯入。可明確執行seed，將`public_frontend/dist/data`轉成CSV、將`dist/assets`複製為首次資產，再預覽匯入。根目錄`lab.json`只作私人參考；兩份原始JSON均不進Git或映像，也不在服務啟動時讀取。登入採Argon2與基本Session保護，完整正式登入安全另階段完善。
 
-[CASINO-web](https://example.org/frontend)以`public_frontend/`子模組引用，獨立部署；官網固定文字與靜態檔由該專案維護。
+公開網站程式碼位於`public_frontend/`，是本倉庫的普通資料夾，可直接修改並與後端一起提交。前端映像只加入五個頁面程式檔；固定設定放volume的`public/site.json`，圖片／PDF放`public/assets/`，由後端維護工具管理。重建前端不會覆寫資料，官網僅掛公開子目錄唯讀。
 
 ## 文件
 

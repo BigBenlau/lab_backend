@@ -10,7 +10,7 @@
 | admin/auth | 14 | 11 | 22 |
 | 合計 | 18 | 15 | 26 |
 
-內部healthz／readyz不計入業務API。每次內容請求讀SQLite，`Cache-Control: no-store`；儲存即公開。JSON嚴格型別、欄位區分大小寫，拒絕未知欄位、重複鍵、NaN／Infinity；保留null、空字串、空陣列的區別。body上限256KiB，有body的管理請求須`Content-Type: application/json`。
+官網Nginx提供的/data/site.json及/assets/是volume靜態檔，不是新增業務API；固定設定不含成員／論文。內部healthz／readyz不計入業務API。每次內容請求讀SQLite，`Cache-Control: no-store`；儲存即公開。JSON嚴格型別、欄位區分大小寫，拒絕未知欄位、重複鍵、NaN／Infinity；保留null、空字串、空陣列的區別。body上限256KiB，有body的管理請求須`Content-Type: application/json`。
 
 Id為1–200字元，英數開頭，其餘英數／底線／連字號。成員按姓／名／ID排序，論文按新增入庫倒序，資產依入庫順序，作者保留署名順序。只有audit分頁；未知query目前忽略。容量超限在提交前拒絕，具體限制見資料字典。
 

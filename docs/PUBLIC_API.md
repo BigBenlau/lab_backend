@@ -52,7 +52,7 @@
 - familyName／givenName分開保存，name由givenName＋空格＋familyName產生；英文名不參與排序、不改論文署名。排序使用NFKC、casefold及去首尾空白，中文姓氏不猜拼音。
 - 論文列表及個人論文按新增入庫倒序；首頁取前三篇，不是三頁。修改年份／標題不移位，CSV最後新增的一列排最前。
 - authors保留署名順序；personId連people.id，外部作者為null；不以同名自動配對。個人頁publications由此關聯取得，沒有相關論文就回[]。
-- 固定介紹、品牌、招募、Contact及早期論文封存連結由前端維護，不新增設定／新聞API。通用圖片描述保留相同metadata格式，避免照片與相簿兩套形狀。
+- 固定介紹、品牌、招募、Contact及早期論文封存連結存於後端管理的public/site.json，由前端唯讀展示，不新增設定／新聞API。通用圖片描述保留相同metadata格式，避免照片與相簿兩套形狀。
 
 ## 欄位取捨
 
@@ -70,9 +70,9 @@
 
 ## PDF、圖片與錯誤
 
-pdfPath為null或`/assets/papers/paper-1.pdf`等同源PDF路徑；前端用`<a href="..." download>`下載。目錄只用英數／底線／連字號，檔名可加點，不接受外站、空白、百分號、穿越、query或fragment。官網須部署實體檔並提供application/pdf；null隱藏按鈕，缺檔由靜態服務回404。
+pdfPath為null或`/assets/papers/paper-1.pdf`等同源PDF路徑；前端用`<a href="..." download>`下載。目錄只用英數／底線／連字號，檔名可加點，不接受外站、空白、百分號、穿越、query或fragment。實體檔存volume的public/assets，由官網Nginx提供application/pdf；null隱藏按鈕，缺檔由靜態服務回404。
 
-圖片url另允許http/https及./assets/，本機前端已支援中文相對檔名；仍拒絕穿越、控制字元及帶帳密URL。metadata無width／height。文字跳脫後顯示，Markdown不執行原始HTML，SVG以圖片載入。[離線缺檔檢查](OPERATIONS.md#缺檔檢查與配對備份)不會抓取外站資產。
+圖片url契約允許http/https及./assets/；正式HTTPS官網僅載入同源或HTTPS圖片，請將外部HTTP圖片改成HTTPS或放入volume。本機前端已支援中文相對檔名；仍拒絕穿越、控制字元及帶帳密URL。metadata無width／height。文字跳脫後顯示，Markdown不執行原始HTML，SVG以圖片載入。[離線缺檔檢查](OPERATIONS.md#日常內容與檔案維護)不會抓取外站資產。
 
 ```js
 const response = await fetch(`/api/people/${encodeURIComponent(personId)}`, {
@@ -84,7 +84,7 @@ if (!response.headers.get('content-type')?.includes('application/json')) throw n
 const {person, publications} = await response.json();
 ```
 
-找不到成員404、非法ID422、內容不可用503；代理可能回HTML、502／504或逾時。應顯示錯誤及重試，不能以空陣列冒充成功。完整[錯誤契約](API.md#錯誤處理)共用。[代理設定](../deploy/frontend-proxy.example.conf)只放行四個GET，不轉送管理路由或Cookie／Authorization。[型別同步](../ARCHITECTURE.md#契約同步)從OpenAPI生成前端型別，不手改生成檔。
+找不到成員404、非法ID422、內容不可用503；代理可能回HTML、502／504或逾時。應顯示錯誤及重試，不能以空陣列冒充成功。完整[錯誤契約](API.md#錯誤處理)共用。[代理設定](../public_frontend/nginx.conf)只放行四個GET，不轉送管理路由或Cookie／Authorization。[型別同步](../ARCHITECTURE.md#契約同步)從OpenAPI生成前端型別，不手改生成檔。
 
 ## 完整合成範例與版本範圍
 
@@ -97,4 +97,6 @@ const {person, publications} = await response.json();
 
 範例使用完全虛構資料，從暫存SQLite的實際ASGI回應產生；未讀取私人lab.json，也不附實體照片／PDF。程式內核對不代表瀏覽器、實體檔案或部署驗收通過，實際檢查見[IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md)。
 
-本次以前端本機待提交版本為準。2026-11-06先前確認GitHub main為[a70eb624](https://example.org/frontend/tree/a70eb62431d40382ffda10a0f674450da6f632ec)，該提交仍讀靜態JSON；工作區調整尚未提交、推送或部署，不能視作線上網站已更新。
+公開頁已固定使用上述四個API；原始data/lab.json只供明確首次seed，不再由瀏覽器讀取。public_frontend是主倉庫的普通資料夾，由Compose的public-web獨立容器提供頁面與代理。建置僅包含五個頁面程式檔，沒有data/assets原始內容。
+
+頁面啟動先GET /data/site.json，之後各頁各取一個內容API；相簿頁讀home，聯絡頁只用固定設定。site.json由Nginx唯讀提供，頂層只有siteSettings、assets（品牌圖）、opportunities（固定聯絡文字），沒有people/publications或合照ID清單。首頁合照仍由SQLite home API決定。初始化、公開檔案與配對備份見[OPERATIONS](OPERATIONS.md)。此靜態設定不計入四個業務API，也不作API故障時的回退。

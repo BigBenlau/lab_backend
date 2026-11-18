@@ -98,13 +98,13 @@ for resource in ALL_MODELS:
 
 compose = yaml.safe_load((ROOT / 'deploy/compose.yml').read_text())
 services = compose['services']
-assert set(services) == {'gateway', 'public-api', 'admin-api', 'tools'}
+assert set(services) == {'public-web', 'gateway', 'public-api', 'admin-api', 'tools'}
 for name, service in services.items():
     assert service['read_only'] and service['cap_drop'] == ['ALL']
     assert service['user'] == '10001:10001'
     for mount in service['tmpfs']:
         assert mount.startswith('/tmp:') and 'size=' in mount and 'nosuid' in mount
-    if name != 'gateway':
+    if name not in ('gateway', 'public-web'):
         assert not service.get('ports')
 public_mounts = services['public-api']['volumes']
 assert {v['target'] for v in public_mounts} == {'/data/content'}
@@ -142,14 +142,38 @@ assert set(services['gateway']['environment']) == {'ADMIN_HOST', 'ADMIN_HTTPS_PO
 entrypoint = (ROOT / 'deploy/gateway-entrypoint.sh').read_text()
 assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' in entrypoint
 
-# 同源代理只放行四個頁面端點，不能轉送任意 API 路徑。
-proxy = (ROOT / 'deploy/frontend-proxy.example.conf').read_text()
+# 官網只讀 public 子目錄；API 路徑白名單不得擴張到管理或探測端點。
+web = services['public-web']
+assert set(web['networks']) == {'public_edge', 'frontend_net'}
+assert web['ports'] == ['0.0.0.0:443:8443']
+assert web['volumes'][0] == {'type': 'volume', 'source': 'lab_data', 'target': '/srv/public',
+                             'read_only': True, 'volume': {'subpath': 'public', 'nocopy': True}}
+assert all(v['read_only'] for v in web['volumes'])
+proxy = (ROOT / 'public_frontend/nginx.conf').read_text()
 for key in ('home', 'people', 'publications'):
-    assert f'location = /api/{key} {{' in proxy
-    assert f'proxy_pass http://$lab_backend/api/v1/public/{key};' in proxy
+    assert f'/api/{key} /api/v1/public/{key};' in proxy
 assert '/api/v1/admin/' not in proxy and '/api/v1/auth/' not in proxy
 assert '/api/schemaVersion' not in proxy and '/api/lab' not in proxy and '/api/assets' not in proxy
-assert 'proxy_pass http://$lab_backend/api/v1/public/people/$person_id;' in proxy
+assert '/api/v1/public/people/$person_id;' in proxy
+assert 'if ($public_path = "") { return 404; }' in proxy
+assert 'if ($request_method != GET)' in proxy and 'proxy_cache off;' in proxy
+assert 'location = /data/site.json { alias /srv/public/site.json; }' in proxy
+assert 'disable_symlinks on;' in proxy and 'location / { return 404; }' in proxy
+assert 'set_real_ip_from' not in proxy and 'real_ip_header' not in proxy
+for config in (proxy, nginx):
+    for name in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
+        assert f'{name}_temp_path /tmp/' in config
+    assert 'proxy_max_temp_file_size 0;' in config
+build_ignore = (ROOT / 'public_frontend/.dockerignore').read_text().splitlines()
+assert '**' in build_ignore and not any(line.startswith('!dist/assets') or line.startswith('!dist/data') for line in build_ignore)
+assert build_ignore.index('dist/**') > build_ignore.index('!dist/')
+assert {line for line in build_ignore if line.startswith('!dist/')} == {
+    '!dist/', '!dist/lab.html', '!dist/lab.js', '!dist/api.js', '!dist/lab.css', '!dist/gold.css'}
+public_docker = (ROOT / 'public_frontend/Dockerfile').read_text()
+assert 'COPY dist/ ' not in public_docker and 'COPY . ' not in public_docker
+assert 'lab.json' not in public_docker and 'COPY dist/assets' not in public_docker
+for source in (ROOT / 'scripts').glob('*.py'):
+    ast.parse(source.read_text(), filename=str(source))
 assert 'lab.json' not in (ROOT / 'deploy/Dockerfile').read_text()
 assert 'lab.json' in (ROOT / '.dockerignore').read_text().splitlines()
 
