@@ -32,7 +32,8 @@ def public_types(spec):
             readonly = 'readonly ' if field.get('readOnly') else ''
             lines.append(f'  {readonly}{key}{optional}: {typescript_type(field)};')
         lines.append('}\n')
-    return '\n'.join(lines) + '\n'
+    # 介面結尾已含換行，避免只因多一空行改動前端子模組。
+    return '\n'.join(lines)
 
 
 def sync(check=False):

@@ -44,7 +44,7 @@ SQLite是唯一執行來源，每次請求開新快照，只讀呼叫端明確�
 
 - init只建空庫；內容經管理頁或明確CSV匯入。lab.json是真實私人參考，不讀取、複製到程式、提交Git或放進Docker。局部檢查只用合成資料。
 - 全部內容儲存即公開，無草稿／發布／封存。研究方向、招募與固定文字由官網維護；無新聞、設定、UMPASS、瀏覽器上傳或媒體worker。
-- 畢業年月存people.graduationDate，為YYYY-MM或null；僅有至少一項身份且所有isCurrent=false的校友可填，其他必須null。管理API、CSV、恢復及讀取共用模型驗證；不補造日期、自動切換身份或靜默清除日期。成員列表與個人詳情均回傳此欄位。尚未正式部署，SQLite10只初始化新庫，不提供舊庫升級工具。
+- 畢業年月存people.alumniSince，為YYYY-MM或null；僅有至少一項身份且所有isCurrent=false的校友可填，其他必須null。管理API、CSV、恢復及讀取共用模型驗證；不補造日期、自動切換身份或靜默清除日期。成員列表與個人詳情均回傳此欄位。尚未正式部署，SQLite10只初始化新庫，不提供舊庫升級工具。
 - 姓名分姓／名，照片存people.portrait。唯一可寫關聯是authors[].personId；publicationIds在同一快照反查，不雙向重複保存或依同名配對。公開不輸出created/updated或其時間，不暴露操作者。
 - englishName為可留空的英文名；公開個人頁直接回相關publications，publicationIds只留在管理回應。首頁只回metadata.purpose=group_photo的全部合照、前三篇摘要及論文總數；已移除people.slug/sourceUrl/affiliation及publications.slug；管理歷史與版本仍保留。
 - 論文內部按rowid升序讀取，API／管理列表／反查倒序，首頁取前三篇。UPSERT保留位置，CSV依列序新增，備份／恢復保持內部順序；不得自行VACUUM、重排或重建表。
@@ -94,6 +94,6 @@ public匿名唯讀、admin登入可寫，使用Argon2，無MD5、預設帳密、
 
 ## 交付邊界
 
-public_frontend是獨立Git子模組，固定提交、獨立部署；本機接線改動尚未提交／部署。路由數量不變，頁面欄位變更時需同步API文件、資料字典、兩份OpenAPI、管理頁與生成型別。舊庫／備份不隱式遷移、覆寫或刪除。
+public_frontend是獨立Git子模組，固定提交、獨立部署；當前遠端版本及對接差異記於實作狀態，更新子模組不等於部署。路由數量不變，頁面欄位變更時需同步API文件、資料字典、兩份OpenAPI、管理頁與生成型別。舊庫／備份不隱式遷移、覆寫或刪除。
 
 本階段只允許語法／匯入、暫存目錄及程序內ASGI局部回歸；不啟動Docker、HTTP listener或部署。正式瀏覽器、安全、負載與故障恢復驗收延後，狀態只記實際執行結果。

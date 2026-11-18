@@ -267,7 +267,7 @@ test('帳戶狀態、審計翻頁及密碼變更均由功能頁呼叫 API', asyn
 test('成員表單展示反向論文，送出僅含可寫欄位，照片可設為 null', async () => {
   const components = JSON.parse(fs.readFileSync(path.join(root, 'docs/admin-openapi.json'), 'utf8')).components.schemas;
   const schema = { ...components.Person, $defs: components };
-  const record = { data: { id: 'amy', familyName: 'Chen', givenName: 'Amy', englishName: null, graduationDate: '2026-06', memberships: [{role: 'masters_student', isCurrent: false}], name: 'Amy Chen', publicationIds: ['paper-1'], portrait: null }, version: 1, created: {at: '2026-11-06T00:00:00Z', by: 'admin1'}, updated: {at: '2026-11-06T00:00:00Z', by: 'admin1'} };
+  const record = { data: { id: 'amy', familyName: 'Chen', givenName: 'Amy', englishName: null, alumniSince: '2026-06', memberships: [{role: 'masters_student', isCurrent: false}], name: 'Amy Chen', publicationIds: ['paper-1'], portrait: null }, version: 1, created: {at: '2026-11-06T00:00:00Z', by: 'admin1'}, updated: {at: '2026-11-06T00:00:00Z', by: 'admin1'} };
   const app = harness({ session: true, override: (url, options) => {
     if (url.endsWith('/schema')) return reply({people: schema, assets: components.Asset, publications: components.Publication});
     if (url.endsWith('/references')) return reply({people: [{id: 'amy', label: 'Amy Chen'}], publications: [{id: 'paper-1', label: 'Linked Paper'}], assets: []});
@@ -288,7 +288,7 @@ test('成員表單展示反向論文，送出僅含可寫欄位，照片可設�
   assert.equal(body.data.familyName, 'Chen'); assert.equal(body.data.givenName, 'Amy');
   assert.equal(body.data.portrait, null);
   assert.equal(body.data.englishName, null);
-  assert.equal(body.data.graduationDate, '2026-06');
+  assert.equal(body.data.alumniSince, '2026-06');
   assert.equal(Object.hasOwn(body.data, 'preferredName'), false);
   assert.equal(Object.hasOwn(body.data, 'name'), false);
   assert.equal(Object.hasOwn(body.data, 'publicationIds'), false);
@@ -319,7 +319,7 @@ test('畢業年月使用month欄位，原樣提交YYYY-MM並可清空為null', a
   const components = JSON.parse(fs.readFileSync(path.join(root, 'docs/admin-openapi.json'), 'utf8')).components.schemas;
   const schema = {...components.Person, $defs: components};
   const app = harness({session: true}); await settle();
-  const control = app.context.field('graduationDate', schema.properties.graduationDate, null, schema);
+  const control = app.context.field('alumniSince', schema.properties.alumniSince, null, schema);
   const input = control.box.querySelectorAll('input').find(i => i.attrs.type === 'month');
   const absent = control.box.querySelectorAll('input').find(i => i.attrs.type === 'checkbox');
   assert.match(control.box.textContent, /畢業年月/);
@@ -331,7 +331,7 @@ test('畢業年月使用month欄位，原樣提交YYYY-MM並可清空為null', a
   assert.equal(new RegExp(input.pattern).test('2026-13'), false);
   absent.checked = true; await absent.emit('change');
   assert.equal(control.read(), null); assert.equal(input.disabled, true);
-  const existing = app.context.field('graduationDate', schema.properties.graduationDate, '2024-02', schema);
+  const existing = app.context.field('alumniSince', schema.properties.alumniSince, '2024-02', schema);
   assert.equal(existing.read(), '2024-02');
 });
 
@@ -342,7 +342,7 @@ test('只有已填歷任身份的校友能送出畢業年月；衝突保留輸�
   for (const memberships of [[], [current], [past, current], [past]]) {
     const allowed = memberships.length > 0 && !memberships.some(m => m.isCurrent);
     const record = {data: {id: 'member', familyName: 'Example', givenName: 'Alex', memberships,
-                          graduationDate: '2026-06'}, version: 1};
+                          alumniSince: '2026-06'}, version: 1};
     const app = harness({session: true, override: (url, options) => {
       if (url.endsWith('/schema')) return reply({people: schema});
       if (url.endsWith('/content/people')) return reply({items: [record]});
@@ -365,7 +365,7 @@ test('只有已填歷任身份的校友能送出畢業年月；衝突保留輸�
       absent.checked = true; await absent.emit('change');
       await form.emit('submit');
       const call = app.calls.find(c => c.options.method === 'PUT');
-      assert.equal(JSON.parse(call.options.body).data.graduationDate, null);
+      assert.equal(JSON.parse(call.options.body).data.alumniSince, null);
       assert.deepEqual(JSON.parse(call.options.body).data.memberships, memberships);
     }
   }

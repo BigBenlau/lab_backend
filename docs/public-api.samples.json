@@ -84,7 +84,7 @@
           "isCurrent": true
         }
       ],
-      "graduationDate": null
+      "alumniSince": null
     },
     {
       "id": "member-sample",
@@ -101,7 +101,7 @@
           "isCurrent": false
         }
       ],
-      "graduationDate": "2024-06"
+      "alumniSince": "2024-06"
     }
   ],
   "/api/v1/public/people/member-example": {
@@ -139,7 +139,7 @@
           "url": "https://example.invalid/member"
         }
       ],
-      "graduationDate": null
+      "alumniSince": null
     },
     "publications": [
       {

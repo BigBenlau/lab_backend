@@ -25,7 +25,7 @@ Id為1–200字元，英數開頭，其餘英數／底線／連字號。成員�
 | GET /api/v1/public/people/{person_id} | path person_id:Id | {person:PublicPerson,publications:PublicPublication[]} |
 | GET /api/v1/public/publications | 無 | PublicPublication[] |
 
-四者無body／query參數。首頁assets只含metadata.purpose=group_photo的合照，取入庫倒序前三篇摘要；詳情按ID匹配，不按slug，找不到404，非法ID422。7.1.0在成員列表的每筆物件及單人詳情的person中新增graduationDate（YYYY-MM或null），路徑及包裝不變。完整輸出欄位及PDF對接見[PUBLIC_API](PUBLIC_API.md)。不提供/lab、單篇論文、獨立assets或已取消功能接口。
+四者無body／query參數。首頁assets只含metadata.purpose=group_photo的合照，取入庫倒序前三篇摘要；詳情按ID匹配，不按slug，找不到404，非法ID422。7.1.0在成員列表的每筆物件及單人詳情的person中新增alumniSince（YYYY-MM或null），路徑及包裝不變。完整輸出欄位及PDF對接見[PUBLIC_API](PUBLIC_API.md)。不提供/lab、單篇論文、獨立assets或已取消功能接口。
 
 ## Admin/auth：14個操作模板
 
@@ -90,10 +90,10 @@ POST的version可省略或null，成功初始1。PUT是完整替換，省略可�
 校友畢業年月沿用people新增／修改API，例如：
 
 ```json
-{"data":{"id":"alumni-example","familyName":"Example","givenName":"Alex","memberships":[{"role":"masters_student","isCurrent":false}],"graduationDate":"2026-06"},"version":null}
+{"data":{"id":"alumni-example","familyName":"Example","givenName":"Alex","memberships":[{"role":"masters_student","isCurrent":false}],"alumniSince":"2026-06"},"version":null}
 ```
 
-graduationDate省略或null表示未提供；"2026-6"、"2026-13"、完整日期、空字串或非字串均回422，整筆不提交。PUT沿用完整替換規則，省略會清空此欄位；只有memberships非空且全部isCurrent=false的校友可填；空身份、任何現任身份或現任／歷任混合身份帶日期均回422。即使role文字寫alumni，也不能繞過isCurrent檢查。轉回現任時須在同次PUT將graduationDate設為null（或省略），否則整筆拒絕；不自動改身份或清除日期。
+alumniSince省略或null表示未提供；"2026-6"、"2026-13"、完整日期、空字串或非字串均回422，整筆不提交。PUT沿用完整替換規則，省略會清空此欄位；只有memberships非空且全部isCurrent=false的校友可填；空身份、任何現任身份或現任／歷任混合身份帶日期均回422。即使role文字寫alumni，也不能繞過isCurrent檢查。轉回現任時須在同次PUT將alumniSince設為null（或省略），否則整筆拒絕；不自動改身份或清除日期。欄位名稱與公開前端一致，不接受舊名稱graduationDate，使用舊名稱回422。
 
 資產最小data為`{"id":"logo","url":"/assets/logo.svg"}`。建立／修改回完整預設欄位。重複id409、缺失personId關聯或刪除被引用成員422；失敗不提交內容或成功審計。publicationIds即時反查，變動不提升people本身的version。
 

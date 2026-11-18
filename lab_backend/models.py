@@ -14,7 +14,7 @@ LoginName = Annotated[str, Field(min_length=3, max_length=80, pattern=r'^[a-z0-9
 Password = Annotated[str, Field(min_length=1, max_length=128)]
 NewPassword = Annotated[str, Field(min_length=15, max_length=128)]
 # 僅保存年月，不補造畢業日；限制有效月份及非零的四位年份。
-GraduationDate = Annotated[str, Field(min_length=7, max_length=7,
+AlumniSince = Annotated[str, Field(min_length=7, max_length=7,
     pattern=r'^(?:[1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(?:0[1-9]|1[0-2])$',
     description='畢業年月YYYY-MM或null；只有memberships非空且全部isCurrent=false的校友可填，其他必須null。')]
 PDF_PATH_PATTERN = r'/assets/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[pP][dD][fF]'
@@ -60,11 +60,11 @@ class Model(BaseModel):
                     raise ValueError('pdfPath 須為 /assets/ 下的 PDF 路徑，檔名使用英數字、底線或連字號')
                 if key.endswith('Email') and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', value):
                     raise ValueError(f'{key} 格式不正確')
-        if getattr(self, 'graduationDate', None) is not None:
+        if getattr(self, 'alumniSince', None) is not None:
             # 無身份資料不能確認為校友；任何現任身份（即使同時有舊身份）都不可填。
             memberships = self.memberships
             if not memberships or any(member.isCurrent for member in memberships):
-                raise ValueError('只有已填身份且全部isCurrent=false的校友可設定graduationDate，其他成員請填null')
+                raise ValueError('只有已填身份且全部isCurrent=false的校友可設定alumniSince，其他成員請填null')
         return self
 
 
@@ -148,7 +148,7 @@ class Person(Model):
     bioMarkdown: str = ''
     interests: Annotated[list[Short], Field(max_length=100)] = []
     memberships: Annotated[list[Membership], Field(max_length=30)] = []
-    graduationDate: GraduationDate | None = None
+    alumniSince: AlumniSince | None = None
     publicEmail: Short | None = None
     links: Annotated[list[Link], Field(max_length=30)] = []
 
@@ -206,7 +206,7 @@ class PersonSummary(Model):
     portrait: Photo | None
     bioMarkdown: str
     memberships: list[Membership]
-    graduationDate: GraduationDate | None
+    alumniSince: AlumniSince | None
 
 
 class PublicPerson(PersonSummary):

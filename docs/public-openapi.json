@@ -695,7 +695,7 @@
             "type": "array",
             "title": "Memberships"
           },
-          "graduationDate": {
+          "alumniSince": {
             "anyOf": [
               {
                 "type": "string",
@@ -708,7 +708,7 @@
                 "type": "null"
               }
             ],
-            "title": "Graduationdate"
+            "title": "Alumnisince"
           }
         },
         "additionalProperties": false,
@@ -723,7 +723,7 @@
           "portrait",
           "bioMarkdown",
           "memberships",
-          "graduationDate"
+          "alumniSince"
         ],
         "title": "PersonSummary",
         "description": "成員目錄只帶名片與簡介；完整履歷、聯絡方式及論文由詳情取得。"
@@ -813,7 +813,7 @@
             "type": "array",
             "title": "Memberships"
           },
-          "graduationDate": {
+          "alumniSince": {
             "anyOf": [
               {
                 "type": "string",
@@ -826,7 +826,7 @@
                 "type": "null"
               }
             ],
-            "title": "Graduationdate"
+            "title": "Alumnisince"
           },
           "interests": {
             "items": {
@@ -868,7 +868,7 @@
           "portrait",
           "bioMarkdown",
           "memberships",
-          "graduationDate",
+          "alumniSince",
           "interests",
           "publicEmail",
           "links"

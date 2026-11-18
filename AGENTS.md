@@ -8,7 +8,7 @@
 - SQLite唯一執行來源：content/content.db三張內容表、private/admin.db的users/audit，共五表。public只掛內容唯讀，每次請求讀新快照；CSV只交換，init只建空庫。內容以id識別，無slug；people無sourceUrl／affiliation。Store.read只讀明確指定的表，反查須同次指定people與publications。
 - lab.json是真實私人參考：不讀取、不複製、不提交Git、不進Docker；檢查只用合成資料。憑證、Cookie、執行庫／journal、匯出與備份不提交或記日誌。
 - 所有內容儲存即公開；無草稿／發布／封存。30人／300篇是估算，不設人數／論文硬上限。每表解碼及CSV各32MiB、單筆業務JSON252KiB，寫入與離線預覽／恢復均須驗證。
-- people.graduationDate為YYYY-MM或null，只有memberships非空且全部isCurrent=false的校友可填，其餘必須null；成員列表／個人詳情均回傳，不自動改身份或靜默清除日期。尚未正式部署，本版僅建新SQLite10空庫，不提供升級指令或操作既有資料檔。
+- people.alumniSince為YYYY-MM或null，只有memberships非空且全部isCurrent=false的校友可填，其餘必須null；成員列表／個人詳情均回傳，不自動改身份或靜默清除日期。尚未正式部署，本版僅建新SQLite10空庫，不提供升級指令或操作既有資料檔。
 - people按姓／名／ID排序，照片直接存portrait；英文名englishName可留空；name/publicationIds在管理回應唯讀。唯一可寫關聯為authors[].personId，不依同名配對、不雙向存清單。論文按入庫倒序，首頁前三篇；編輯不移位，內部／備份保持rowid升序，不自行VACUUM／重建改順序。
 - 寫交易維持ATTACH＋BEGIN IMMEDIATE＋DELETE journal＋FULL synchronous；內容及審計一起提交，鎖內重查權限／版本／關聯，密碼雜湊不持寫鎖。SQL值參數綁定、表名白名單。
 - 公開固定快照後有內容庫journal即503，由管理程序在原環境／原路徑恢復，不刪日誌。只支援單台Linux本機檔案系統、單一admin worker；離線寫入須停管理服務。

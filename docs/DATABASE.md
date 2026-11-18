@@ -11,7 +11,7 @@
 
 Id為1–200字元，英數開頭，其餘英數或_-；Name為1–500字元，Short最多500，一般字串最多50000。URL最多2048，允許無帳密的http/https，名為url的欄位另允許./assets/、/assets/；禁止控制字元、反斜線及相對路徑穿越。時間需含時區；API布林只接受true/false。
 
-本版新增people.graduationDate，保存畢業年月。people不含slug／sourceUrl／affiliation，publications不含slug。ID已足夠識別與連結；論文sourceUrl仍用於前端來源連結。管理API／CSV不再接受被移除欄位。
+本版新增people.alumniSince，保存畢業年月，名稱與公開前端一致；SQLite欄位及CSV標頭均使用alumniSince，不保留graduationDate別名。people不含slug／sourceUrl／affiliation，publications不含slug。ID已足夠識別與連結；論文sourceUrl仍用於前端來源連結。管理API／CSV不再接受被移除欄位。
 
 ## 完整欄位
 
@@ -43,7 +43,7 @@ created／updated／_version由系統維護，不屬於可寫data；公開不輸
 | `bioMarkdown` | TEXT | 否 | string（字元≤50000） | `""` | 成員介紹 Markdown |
 | `interests` | TEXT（JSON） | 否 | string（字元≤500）[]（0–100項） | `[]` | 研究興趣文字陣列 |
 | `memberships` | TEXT（JSON） | 否 | Membership[]（0–30項） | `[]` | 身份物件陣列，含在任標記；不是帳戶權限 |
-| `graduationDate` | TEXT | 是 | string（固定7字元，YYYY-MM）或null | `null` | 校友畢業年月，年份0001–9999、月份01–12；非校友只能null，成員列表及詳情均回傳 |
+| `alumniSince` | TEXT | 是 | string（固定7字元，YYYY-MM）或null | `null` | 校友畢業年月，年份0001–9999、月份01–12；非校友只能null，成員列表及詳情均回傳 |
 | `publicEmail` | TEXT | 是 | string（字元≤500） 或 null | `null` | 公開 Email；空值不生成聯絡連結 |
 | `links` | TEXT（JSON） | 否 | Link[]（0–30項） | `[]` | 連結物件陣列，保留原順序 |
 | `_version` | INTEGER | 否 | integer ≥1 | `1` | 內容編輯版本；初始1，每次成功 PUT 加一；回應為外層 version |
@@ -109,7 +109,7 @@ created、updated各為單一JSON物件，例如`{"at":"2026-11-06T10:00:00Z","b
 
 name固定為givenName＋空格＋familyName；englishName獨立保存英文名，可為null或空字串；不參與排序、組合name或論文署名。公開頁面可顯示為name (englishName)。people列表及管理選項按NFKC正規化、casefold、去首尾空白後的姓、名，再按原始ID排序；中文不猜拼音。
 
-graduationDate例如"2026-06"，只保存年月，沒有日或時區；未畢業或未知為null，不使用空字串、完整日期或純年份。省略輸入預設null，PUT省略會清空。填寫資格依memberships判斷：至少一項身份且全部isCurrent=false。空身份視為未確認，任何現任身份或混合身份均只能null，role文字為alumni也不例外。校友可保持null。轉回現任須同次清空日期，否則拒絕整筆；不自動改身份或清除日期。管理API、CSV預覽／套用、初始化、備份恢復及讀庫驗證共用此規則。
+alumniSince例如"2026-06"，只保存年月，沒有日或時區；未畢業或未知為null，不使用空字串、完整日期或純年份。省略輸入預設null，PUT省略會清空。填寫資格依memberships判斷：至少一項身份且全部isCurrent=false。空身份視為未確認，任何現任身份或混合身份均只能null，role文字為alumni也不例外。校友可保持null。轉回現任須同次清空日期，否則拒絕整筆；不自動改身份或清除日期。管理API、CSV預覽／套用、初始化、備份恢復及讀庫驗證共用此規則。
 
 唯一可寫關聯是`publications.authors[].personId → people.id`。內部作者指定ID，外部作者為null；署名name獨立保存，成員改名不改論文署名，不按同名自動匹配。缺失ID或刪除被引用成員整筆拒絕，無級聯刪除。
 

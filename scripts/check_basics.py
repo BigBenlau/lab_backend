@@ -58,10 +58,11 @@ assert 'publicationIds' not in public['components']['schemas']['PersonSummary'][
 assert set(public['components']['schemas']['Counts']['properties']) == {'publications'}
 assert 'englishName' in public['components']['schemas']['PersonSummary']['properties']
 for model in ('PersonSummary', 'PublicPerson'):
-    assert 'graduationDate' in public['components']['schemas'][model]['properties']
-    assert 'graduationDate' in public['components']['schemas'][model]['required']
-assert 'graduationDate' not in admin['components']['schemas']['Person']['required']
-assert MODELS['people'].model_fields['graduationDate'].default is None
+    assert 'alumniSince' in public['components']['schemas'][model]['properties']
+    assert 'alumniSince' in public['components']['schemas'][model]['required']
+assert 'alumniSince' not in admin['components']['schemas']['Person']['required']
+assert MODELS['people'].model_fields['alumniSince'].default is None
+assert 'graduationDate' not in MODELS['people'].model_fields
 assert not {'preferredName', 'slug', 'createdAt', 'updatedAt', 'affiliation', 'publicationIds'} & public['components']['schemas']['PublicPerson']['properties'].keys()
 assert set(public['components']['schemas']['PublicationSummary']['properties']) == {'id', 'title', 'year', 'type', 'venue'}
 assert set(admin['components']['schemas']['Access']['properties']) == {'active', 'version'}
