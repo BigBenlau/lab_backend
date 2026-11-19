@@ -29,5 +29,5 @@ Python與維護工具全部在容器內，VPS只需已有Docker、Compose及可�
 - [架構、安全及閱讀程式](ARCHITECTURE.md)
 - [API清單與管理對接](docs/API.md) · [公開前端對接](docs/PUBLIC_API.md)
 - [SQLite欄位與關聯](docs/DATABASE.md)
-- [安裝、部署與維護](docs/OPERATIONS.md)
+- [阿里雲香港 SAS 正式 HTTPS 部署與維護](docs/OPERATIONS.md)
 - [Public OpenAPI](docs/public-openapi.json) · [Admin OpenAPI](docs/admin-openapi.json)

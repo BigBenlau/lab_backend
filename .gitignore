@@ -26,6 +26,8 @@ secrets/
 lab.json
 /public_frontend/dist/data/
 /public_frontend/dist/assets/
+# 設計與瀏覽器截圖可能包含成員資料，只在本機保存。
+/public_frontend/previews/
 
 # 執行庫及journal、離線交換與備份，不加入程式版本。
 storage/
