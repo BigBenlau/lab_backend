@@ -80,7 +80,7 @@ flowchart LR
 
 三個常駐容器、兩個映像：gateway提供兩個前端及代理，public-api與admin-api共用Python映像但分開運行。兩API無主機端口，只監聽容器8000；public-api只連frontend_net、唯讀掛content子目錄，admin-api只連admin_net、掛完整volume到/data且可寫兩庫。gateway連兩內網，但只唯讀掛public子目錄，不能讀SQLite或private；tools按需維護或watch成為第四個常駐容器，不開listener、不掛Docker socket。
 
-公開及管理入口使用不同listener與靜態根目錄：公開只代理固定四個GET到public-api，清除Cookie／Authorization、隱藏Set-Cookie，其他API及未知檔案路徑404；管理只代理auth/admin到admin-api，保留Cookie與CSRF。不能以公開端口、更換Host或改URL繞到管理路由。兩套請求限流、body限制及CSP各自保留，標頭不因Nginx的server繼承而互相污染。共用入口是明確的部署取捨：Nginx程序及兩份TLS私鑰的故障／入侵影響面合併，入口重啟同時影響官網與管理頁；兩個API的程序、網路及資料權限隔離仍保留，不能宣稱與兩個獨立Nginx完全等同。
+公開及管理入口使用不同listener與靜態根目錄：公開只代理固定四個GET到public-api，清除Cookie／Authorization、隱藏Set-Cookie，其他API及未知檔案路徑404；管理只代理auth/admin到admin-api，保留Cookie與CSRF。不能以公開端口、更換Host或改URL繞到管理路由。兩套請求限流、body限制及CSP各自保留，標頭不因Nginx的server繼承而互相污染。共用入口是明確的部署取捨：共用 Nginx 程序及站點私鑰，兩個入口有共同的故障與金鑰暴露風險，入口重啟同時影響官網與管理頁；兩個API的程序、網路及資料權限隔離仍保留，不能宣稱與兩個獨立Nginx完全等同。
 
 不依賴.env、ADMIN_HOST或LAB_ADMIN_ORIGIN。lab.sh固定Compose專案名lab-backend並以--env-file /dev/null忽略舊.env，volume名與使用者現有部署相同，公開網路固定lab-content。HTTP明確用lab.sh http，其他命令預設HTTPS；不自動選端口或終止主機服務。HTTP映射80→8080與27181→27181；HTTPS映射443→8443與27182→27182。官網容器端口避開特權端口，管理端口內外相同；模式、Compose映射與Nginx生成片段由檢查共同核對。
 
@@ -96,7 +96,9 @@ public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或
 
 來源IP僅由Cloud防火牆／安全組管理，程式無IP清單。部署前限制管理端口、確認規則套用實際VPS／網卡；非標準端口不能取代登入或防火牆。僅IPv4直接連VPS，不經CDN或額外代理、不配置AAAA；驗證允許與不允許的來源，不能只看UFW。
 
-HTTPS保留官網443與管理27182，主機secrets/public-tls與secrets/tls分別唯讀掛到gateway的/run/public-tls與/run/tls；完整憑證鏈及私鑰須配對、SAN符合瀏覽器域名。共用Nginx需要兩份TLS都正確才可啟動／reload。憑證、Cookie、執行庫／journal、匯出與備份不能進Git、映像或日誌。正式自動續期仍未實作：獨立ACME容器以DNS驗證，機密不給API或gateway、不掛Docker socket；配對檢查、成組發布、gateway載入及實際握手均成功才算完成，失敗保留有效版本並告警。詳見[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)。
+正式 HTTPS 先以公網 IPv4 提供官網 443 與後台 27182，域名解析就緒後，兩個入口一起切換至域名憑證。同一對完整憑證鏈及私鑰安裝到 secrets/public-tls 與 secrets/tls，兩處均唯讀掛載至 gateway。Cookie 可跨同主機端口，公開代理清除 Cookie，管理寫入仍檢查含端口的 Origin 及 CSRF。憑證金鑰、Cookie、執行庫／journal、匯出與備份須留在私人儲存。
+
+deploy/tls.sh 協調按需執行的 Docker lego。TLS-ALPN-01 直接驗證 443，IP 使用 shortlived profile。實際簽發時短暫停止 gateway，兩個 API 與資料庫可繼續運作。工具持鎖核對身份、信任鏈、配對私鑰及兩個在線指紋，保留可恢復的舊 PEM 與目前模式。首次啟動前只能檢查本地檔案。手冊提供由帳號 B 啟用的 OOS 排程範本，不掛 Docker socket。雲端排程及真實續期須在目標環境確認。[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)
 
 DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 

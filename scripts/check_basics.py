@@ -261,6 +261,8 @@ subprocess.run(['node', '--check', str(ROOT / 'admin_frontend/admin/app.js')], c
 for source in (ROOT / 'public_frontend/dist').glob('*.js'):
     subprocess.run(['node', '--check', str(source)], check=True)
 for source in (ROOT / 'deploy').glob('*.sh'):
-    subprocess.run(['sh', '-n', str(source)], check=True)
+    # Ubuntu 的 /bin/sh 是 dash，TLS 維護腳本明確使用 Bash 陣列及 pipefail。
+    shell = 'bash' if source.read_text().startswith('#!/bin/bash\n') else 'sh'
+    subprocess.run([shell, '-n', str(source)], check=True)
 print('PASS: Python imports, public/admin contracts, 5-table dictionary, YAML boundaries, JS/shell syntax.')
 print('Scope: basic checks only. Regression suite is a separate command; no HTTP listener, Docker or deployment here.')
