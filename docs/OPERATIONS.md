@@ -1,8 +1,8 @@
 # 阿里雲香港 SAS 部署與維護
 
-**官網使用 `https://casino.ye.wang/` 和 `https://crab.ye.wang/`，兩個網址開啟同一個網站。** 同一張憑證列出這兩個子域名。官網對外使用 443，管理後台使用同一域名加上 `:27182`，由 SAS 防火牆限制管理員來源。正式環境關閉 80。
+**同一張 HTTPS 憑證涵蓋 `casino.ye.wang`、`crab.ye.wang`、`ye.wang` 及 SAS 公網 IPv4。** 四個網址都可以開啟同一個官網（443），管理後台在各網址加上 `:27182`，由 SAS 防火牆限制管理員來源。正式環境關閉 80。
 
-帳號 A 管理 `ye.wang` 的 DNS，帳號 B 管理香港 SAS、Docker 及憑證。若網站已上線，直接完成[兩筆 DNS 記錄](#site-dns)及[既有 HTTPS 換證](#site-cutover)。首次部署從下方步驟 1 開始。主機指令均在 SAS 專案根目錄執行。
+帳號 A 管理 `ye.wang` 的 DNS，帳號 B 管理香港 SAS、Docker 及憑證。若網站已上線，直接完成[三個域名的 DNS 記錄](#site-dns)及[既有 HTTPS 換證](#site-cutover)。首次部署從下方步驟 1 開始。主機指令均在 SAS 專案根目錄執行。
 
 ## 首次部署
 
@@ -27,27 +27,28 @@
 
 <a id="site-dns"></a>
 
-### 3. A 設定兩筆 DNS，B 確認解析
+### 3. A 核對三個域名的 DNS，B 確認公網 IP
 
 B 提供 SAS 的實際公網 IPv4。A 在阿里雲「雲解析 DNS」選 `ye.wang`，在「解析設定」新增或更新下表記錄。解析線路與 TTL 可用預設值。[阿里雲新增解析記錄](https://help.aliyun.com/zh/dns/pubz-add-parsing-record)
 
 | 主機記錄 | 記錄類型 | 記錄值 |
 |---|---|---|
-| `casino` | `A` | SAS 的實際公網 IPv4 |
+| `@`（ye.wang） | `A` | SAS 的實際公網 IPv4 |
+| `casino` | `A` | 同一個公網 IPv4 |
 | `crab` | `CNAME` | `casino.ye.wang` |
 
-這樣將來搬主機只需更新 `casino` 的 A 記錄，兩個網址都會跟隨。根域名 `@` 可獨立使用。若 `crab` 已經服務另一個網站，先確認切換時間、記下原記錄及 TTL，再替換同名的衝突記錄。設定 CNAME 後，瀏覽器的網址仍為 `crab.ye.wang`，所以 Nginx 送出的憑證也須涵蓋這個名稱。[TLS 服務名稱驗證](https://www.rfc-editor.org/rfc/rfc9525.html#section-6.1)
+沿用已指向此 SAS 的記錄即可。按上表配置時，公網 IP 若改變，需同步更新兩筆 A 記錄及主機上的 `/var/lib/lab-tls/ip`，然後執行 `lab-tls renew`。若 `crab` 已經服務另一個網站，先確認切換時間、記下原記錄及 TTL，再替換同名的衝突記錄。設定 CNAME 後，瀏覽器的網址仍為 `crab.ye.wang`，所以 Nginx 送出的憑證也須涵蓋這個名稱。[TLS 服務名稱驗證](https://www.rfc-editor.org/rfc/rfc9525.html#section-6.1)
 
-從外部電腦查詢。兩個名稱的 A 查詢都應最終得到同一個 SAS IPv4，AAAA 查詢應無 IPv6 位址。CNAME 別名可能額外顯示目標名稱。若已有 CAA 限制，確認允許 Let’s Encrypt 簽發。[Let’s Encrypt CAA 說明](https://letsencrypt.org/docs/caa/)
+從外部電腦查詢。三個名稱的 A 查詢都應最終得到同一個 SAS IPv4，AAAA 查詢應無 IPv6 位址。CNAME 別名可能額外顯示目標名稱。若已有 CAA 限制，確認允許 Let’s Encrypt 簽發。[Let’s Encrypt CAA 說明](https://letsencrypt.org/docs/caa/)
 
 ```sh
-for host in casino.ye.wang crab.ye.wang; do
+for host in casino.ye.wang crab.ye.wang ye.wang; do
   dig +short A "$host"
   dig +short AAAA "$host"
 done
 ```
 
-B 準備可收信的 ACME 聯絡信箱。由 lego 向 Let’s Encrypt 申請，驗證方式為 TLS-ALPN-01。兩個名稱均需可由公網直達 SAS 的 443。DNS 就緒後，簽發與續期都可由 B 完成，無需帳號 A 的 DNS 金鑰。[Let’s Encrypt 驗證方式](https://letsencrypt.org/docs/challenge-types/#tls-alpn-01)
+B 準備可收信的 ACME 聯絡信箱。由 lego 向 Let’s Encrypt 申請，驗證方式為 TLS-ALPN-01。三個域名和裸 IP 均須可由公網直達此 SAS 的 TCP 443。DNS 就緒後，簽發與續期都可由 B 完成，無需帳號 A 的 DNS 金鑰。[Let’s Encrypt 驗證方式](https://letsencrypt.org/docs/challenge-types/#tls-alpn-01)
 
 ### 4. 安裝 Docker 並取得部署版本
 
@@ -100,15 +101,17 @@ sudo docker pull goacme/lego:v5.6.0
 
 ```sh
 ACME_EMAIL=ops@example.org
+SAS_IPV4='請換成 SAS 控制台顯示的公網 IPv4'
 sudo install -d -o root -g root -m 0700 /var/lib/lab-tls
 sudo install -o root -g root -m 0700 deploy/tls.sh /usr/local/sbin/lab-tls
 printf '%s\n' "$PWD" | sudo tee /var/lib/lab-tls/project >/dev/null
 printf '%s\n' "$ACME_EMAIL" | sudo tee /var/lib/lab-tls/email >/dev/null
-sudo /usr/local/sbin/lab-tls sites
+printf '%s\n' "$SAS_IPV4" | sudo tee /var/lib/lab-tls/ip >/dev/null
+sudo /usr/local/sbin/lab-tls issue
 sudo openssl x509 -in secrets/public-tls/cert.pem -noout -ext subjectAltName -enddate
 ```
 
-`sites` 申請一張包含 `DNS:casino.ye.wang` 和 `DNS:crab.ye.wang` 的憑證。首次上線前，臨時 lego 容器直接綁定主機 443。已有 HTTPS 服務時，驗證經 gateway 分流。`/var/lib/lab-tls` 保存帳戶、憑證快取、續期模式和專案路徑，入口目錄僅 root 可讀。專案及其父目錄只允許受信任的部署者寫入。更新腳本後須重新安裝到 `/usr/local/sbin/lab-tls`。兩組服務用 PEM 分別放在 `secrets/public-tls/` 與 `secrets/tls/`，擁有者 10001:10001，目錄 0700、檔案 0600。
+`issue` 用於首次安裝。尚無憑證且 gateway 未啟動時，lego 臨時綁定 443 以完成驗證，安裝後接步驟 6 核對線上服務。已上線的主機使用下方的[換證步驟](#site-cutover)。同一對憑證鏈及私鑰分別放在 `secrets/public-tls/` 與 `secrets/tls/`，擁有者為 10001:10001，目錄 0700、檔案 0600。`/var/lib/lab-tls` 保存 ACME 帳戶、快取、專案路徑、信箱及實際公網 IP，入口目錄僅 root 可讀。專案及其父目錄只允許受信任的部署者寫入。
 
 **僅新建空庫**使用以下命令。透過私人通道將已核准公開的首次來源放到 `public_frontend/dist/data/lab.json` 和 `public_frontend/dist/assets/`。Git 與映像均不包含它們。容器 UID 10001 需能進入掛載的 `dist` 和相關子目錄並讀取檔案。資料轉換時來源唯讀，根目錄的私人參考檔不參與部署。
 
@@ -138,10 +141,11 @@ sh deploy/lab.sh exec -T gateway nginx -t -c /tmp/nginx.conf
 
 <a id="site-check"></a>
 
-從**防火牆允許的外部工作電腦**驗證。每個域名依序應回應 200、200、401。curl 使用預設憑證驗證，會一併檢查網址名稱及信任鏈。再用瀏覽器核對內容、PDF 和管理登入。兩個子域名有各自的管理登入 Cookie。從未獲准的來源確認官網可用、後台 27182 受限。
+從**防火牆允許的外部工作電腦**驗證。在該電腦輸入實際公網 IPv4。三個域名和裸 IP 各自依序應回應 200、200、401。curl 使用預設憑證驗證，會一併檢查網址名稱及信任鏈。再用瀏覽器核對內容、PDF 和管理登入。使用不同主機名稱或 IP 會各自取得管理登入 Cookie。從未獲准的來源確認官網可用、後台 27182 受限。
 
 ```sh
-for host in casino.ye.wang crab.ye.wang; do
+SAS_IPV4='請換成 SAS 的實際公網 IPv4'
+for host in casino.ye.wang crab.ye.wang ye.wang "$SAS_IPV4"; do
   curl -sS -o /dev/null -w '%{http_code}\n' "https://$host/api/home"
   curl -sS -o /dev/null -w '%{http_code}\n' "https://$host:27182/"
   curl -sS -o /dev/null -w '%{http_code}\n' "https://$host:27182/api/v1/auth/session"
@@ -152,46 +156,51 @@ done
 
 ### HTTPS憑證與自動續期
 
-**B 只需啟用一個 `renew` 任務。** 每 6 小時檢查一次，`sites` 模式在剩餘 14 天內續簽。已運行舊版的站點先完成下方的[換證步驟](#site-cutover)。切換成功後，既有 OOS 或 cron 任務會自動續簽同一組兩個域名。
+**保留一個每 6 小時執行 `/usr/local/sbin/lab-tls renew` 的任務。** Let’s Encrypt 的 `shortlived` 憑證有效期為 160 小時，腳本在剩餘約 72 小時時開始續簽。已上線的舊站先完成[切換步驟](#site-cutover)。[Let’s Encrypt 短效憑證規格](https://letsencrypt.org/docs/profiles/#shortlived)
 
-```sh
-sudo cat /var/lib/lab-tls/active     # 切換成功應為 sites
-sudo /usr/local/sbin/lab-tls renew
-```
-
-簽發期間，gateway 只把 443 上專用的驗證握手轉給 lego，兩個網站名稱與管理入口繼續由 Nginx 服務。腳本在替換檔案前核對兩個 SAN、信任鏈及配對私鑰，執行 `nginx -t` 並平滑重載，最後按兩個名稱逐一核對 443、27182 的憑證指紋。憑證有效且已生效時只做檢查。[Nginx 握手分流](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) · [Nginx 平滑重載](https://nginx.org/en/docs/control.html)
+續期時 gateway 持續接收一般 HTTPS 流量，只將 443 上的 `acme-tls/1` 驗證握手轉給 Docker 內網的臨時 lego。安裝前核對憑證識別清單（SAN）恰好含三個 DNS 名稱及一個 IP、信任鏈有效、私鑰配對。腳本再用 `nginx -t` 及平滑 reload 載入新憑證，進行中的請求由舊 worker 完成。最後在 443 與 27182 各驗四次握手：域名送 SNI，裸 IP 核對預設憑證，八次指紋均須相符。有效期充足且兩端都已生效時只做檢查。[Nginx 握手分流](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) · [Nginx 平滑重載](https://nginx.org/en/docs/control.html)
 
 <a id="site-cutover"></a>
 
 #### 已上線的 HTTPS 網站換證
 
-先完成[步驟 3 的 DNS 核對](#site-dns)，將包含新版 `deploy/tls.sh` 與 `deploy/acme-stream.conf` 的部署版本同步至 SAS 的原專案目錄。保留原有的 ACME 帳戶、資料及排程。在舊憑證仍有效、沒有續期任務正在執行時，在專案根目錄核對 gateway。
+1. 確認[三個域名的 DNS](#site-dns) 均指向 SAS，443 可從公網連入，80 關閉，27182 僅允許管理來源。先把新版部署檔同步至 SAS 原專案目錄。選在舊憑證仍有效且沒有正在執行的換證任務時操作，保留原 ACME 帳戶、掛載目錄和資料卷。
+2. 在 SAS 終端機檢查 gateway 和現有的 IP 設定。將顯示的 IP 與 SAS 控制台核對；曾只用域名的主機可能尚無 `ip` 檔。
 
 ```sh
+cd -- "$(sudo cat /var/lib/lab-tls/project)"
 sudo sh deploy/lab.sh ps gateway
 sudo sh deploy/lab.sh exec -T gateway grep -Fx 'include /etc/lab/acme-stream.conf;' /tmp/nginx.conf
+sudo test ! -f /var/lib/lab-tls/ip || sudo cat /var/lib/lab-tls/ip
 ```
 
-如輸出 `include /etc/lab/acme-stream.conf;`，直接執行下方的換證命令。如 gateway 已正常運行正式 HTTPS、但設定中缺少該行，先在維護時段執行以下兩行。這次更新舊映像會短暫影響官網及後台。
+若 `ip` 缺少或與 SAS 控制台不同，在 SAS 執行以下指令，輸入實際公網 IPv4。
+
+```sh
+SAS_IPV4='請換成 SAS 控制台顯示的公網 IPv4'
+printf '%s\n' "$SAS_IPV4" | sudo tee /var/lib/lab-tls/ip >/dev/null
+```
+
+3. 若上方顯示 `include /etc/lab/acme-stream.conf;`，直接進行第 4 步。如正式 HTTPS gateway 正常運行但設定缺少該行，先在維護時段執行下面的一次性更新。重建舊 gateway 會短暫影響兩個入口。此後換證只做平滑重載。
 
 ```sh
 sudo sh deploy/lab.sh build gateway
 sudo sh deploy/lab.sh up -d --no-deps --force-recreate gateway
+sudo sh deploy/lab.sh exec -T gateway nginx -t -c /tmp/nginx.conf
 ```
 
-**換證命令**會沿用原 `project` 與 `email` 設定。在支援分流的 gateway 上，換證期間可持續使用原有網站入口。
+4. 安裝新版主機腳本並執行與排程相同的命令。它會沿用 `project`、`email`、`ip` 及原 ACME 帳戶，用獨立的 lego 快取取得共用憑證。舊 `active`、`domain` 檔和舊憑證快取可原樣保留，新腳本只辦理這一組識別。
 
 ```sh
 sudo install -o root -g root -m 0700 deploy/tls.sh /usr/local/sbin/lab-tls
-sudo /usr/local/sbin/lab-tls sites
-sudo cat /var/lib/lab-tls/active
-sudo openssl x509 -in secrets/public-tls/cert.pem -noout -ext subjectAltName -enddate
 sudo /usr/local/sbin/lab-tls renew
+sudo openssl x509 -in secrets/public-tls/cert.pem -noout -ext subjectAltName -enddate -fingerprint -sha256
+sudo openssl x509 -in secrets/tls/cert.pem -noout -enddate -fingerprint -sha256
 ```
 
-確認 `active` 顯示 `sites`，SAN 只列出兩個子域名，再從外部執行[兩個網址的檢查](#site-check)。新憑證的適用範圍限於這兩個名稱，請同步更新原先使用根域名或裸 IP 的管理書籤和監測網址。
+5. 核對 SAN 顯示 `DNS:casino.ye.wang`、`DNS:crab.ye.wang`、`DNS:ye.wang` 和 `IP Address:實際公網IPv4`，兩處指紋應相同。從獲准來源完成[四個網址的外部檢查](#site-check)。檢查 OOS 週期任務及 `sudo crontab -l`，保留一個每 6 小時執行 `lab-tls renew` 的任務。已符合的舊排程直接沿用，原先指定個別模式的任務應停用或改成同一條命令。
 
-任何一個域名驗證失敗，腳本會回報失敗並保留現有模式及線上憑證。若已開始安裝才發生錯誤，腳本會回復兩處 PEM 及原模式並重新載入。修正 DNS 或 443 可達性後重試 `lab-tls sites`。舊 `ip`、`domain`、`dual` 的私有檔案與憑證快取仍可供舊模式使用。
+簽發或憑證驗證失敗時，原有 PEM 繼續服務。若已開始安裝而重載或握手失敗，腳本會嘗試還原兩處 PEM 並平滑重載。中斷的安裝由下次執行先復原。排除 DNS、IP 或 443 可達性問題後，重跑 `sudo /usr/local/sbin/lab-tls renew`。修復期間留意舊憑證的到期日。
 
 #### 選擇排程
 
@@ -261,13 +270,13 @@ Tasks:
     Delay: 10
 ```
 
-4. 在 OOS 執行詳情核對首輪的 `send` 和 `result`，之後確認下一輪也有啟動。為任務失敗設定維護者通知，並由獨立監測從管理來源檢查兩端可用性及到期時間，可為兩個域名設定到期前 7 天告警。若 OOS 執行停止或到達結束日期，需重新啟用。需啟用 OOS 或上述 cron 其中一個，才會定時執行。
+4. 在 OOS 執行詳情核對首輪的 `send` 和 `result`，之後確認下一輪也有啟動。為任務失敗設定維護者通知，並由獨立監測從管理來源檢查兩端可用性及到期時間，可設剩餘 48 小時仍未更新時告警。若 OOS 執行停止或到達結束日期，需重新啟用。需啟用 OOS 或上述 cron 其中一個，才會定時執行。
 
 ## 其他部署情境
 
 ### 既有環境切換
 
-- **同一主機，已有 HTTP 測試資料**。先在原模式配對備份（該次備份命令使用 `sh deploy/lab.sh http …`），用 `sh deploy/lab.sh http stop tools` 停止原有監測，準備防火牆及映像後，用 `sh deploy/lab.sh http stop gateway` 停止舊測試入口，確認兩個域名的 DNS 已就緒，再執行第 5 步申請網站憑證。以 `sh deploy/lab.sh up -d --force-recreate public-api admin-api gateway` 切換，接步驟 6 驗證；確認雲端 80、27181 的測試放行已撤銷。兩模式共用 `lab-backend_lab_data`，保留原帳戶與內容，跳過 init、seed、CSV 匯入及公開內容安裝。管理員需重新登入。
+- **同一主機，已有 HTTP 測試資料**。先在原模式配對備份（該次備份命令使用 `sh deploy/lab.sh http …`），用 `sh deploy/lab.sh http stop tools` 停止原有監測，準備防火牆及映像後，用 `sh deploy/lab.sh http stop gateway` 停止舊測試入口，確認三個域名的 DNS 和公網 IPv4 已就緒，再執行第 5 步申請網站憑證。以 `sh deploy/lab.sh up -d --force-recreate public-api admin-api gateway` 切換，接步驟 6 驗證；確認雲端 80、27181 的測試放行已撤銷。兩模式共用 `lab-backend_lab_data`，保留原帳戶與內容，跳過 init、seed、CSV 匯入及公開內容安裝。管理員需重新登入。
 - **從另一台主機遷移既有資料**。先取得來源主機同版本的資料庫及靜態檔案配對備份。新 SAS 在備好程式、憑證及雲端規則後走[恢復](#恢復)，再按步驟 6 驗證。不同主機上的同名 Docker volume 彼此獨立。
 
 ### HTTP 內容測試
@@ -383,7 +392,7 @@ curl -i http://127.0.0.1:27181/api/v1/auth/session
 
 HTTP的admin-info應同時顯示：主機27181→容器27181、listen 27181、gateway_http_test=true、api_http_test=True、origin_scheme=http、session_cookie=lab_session_http_test。它只讀運行中容器的端口／模式，不列密碼或整份環境。第一個curl應回登入頁HTML；未登入的session應回401，表示API可達且權限檢查生效。
 
-HTTPS用不帶http的admin-info，端口應為27182、listen帶ssl、兩端HTTP測試模式均關閉、origin_scheme=https、Cookie為__Host-lab_session。正式瀏覽器網址使用憑證列出的兩個子域名。
+HTTPS用不帶http的admin-info，端口應為27182、listen帶ssl、兩端HTTP測試模式均關閉、origin_scheme=https、Cookie為__Host-lab_session。正式瀏覽器網址使用憑證列出的三個域名或公網 IPv4。
 
 | 現象 | 檢查／處理 |
 |---|---|
