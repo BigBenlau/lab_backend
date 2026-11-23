@@ -20,7 +20,7 @@ check_context() {
 check_web() {
     # 共用gateway建置前檢查頁面與設定；只讀檔案狀態，不讀初始化資料。
     check_context
-    for web_file in deploy/Dockerfile.gateway deploy/nginx.conf.template deploy/gateway-entrypoint.sh \
+    for web_file in deploy/Dockerfile.gateway deploy/nginx.conf.template deploy/acme-stream.conf deploy/gateway-entrypoint.sh \
         admin_frontend/admin/index.html admin_frontend/admin/app.js admin_frontend/admin/style.css \
         public_frontend/dist/lab.html public_frontend/dist/lab.js public_frontend/dist/api.js \
         public_frontend/dist/lab.css public_frontend/dist/gold.css; do

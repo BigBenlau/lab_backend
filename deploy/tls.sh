@@ -16,10 +16,9 @@ cd "$project"
 [[ -f deploy/compose.yml ]] || die '找不到專案 Compose 設定'
 lab() { sh deploy/lab.sh "$@"; }
 
-# 剛重啟的 Nginx 需先生成 /tmp/nginx.conf 與 PID，才可送出 reload 訊號。
-load_gateway() {
+# 先檢查完整設定和兩組 PEM，再讓舊 worker 完成手上的連線。
+reload_gateway() {
   local attempt
-  lab start gateway
   for attempt in {1..10}; do
     if lab exec -T gateway sh -c 'test -s /tmp/nginx.pid && nginx -t -c /tmp/nginx.conf && nginx -s reload -c /tmp/nginx.conf'; then return 0; fi
     sleep 1
@@ -27,7 +26,14 @@ load_gateway() {
   return 1
 }
 
-# pending 在停服務或動 PEM 之前就緒。中斷時，下一次執行會先恢復兩個入口。
+# 私鑰暫存於同一個私有目錄。rename 同時讓 Nginx 在 reload 時看見新 inode。
+replace_pem() {
+  local source=$1 target=$2 staging=${2%/*}/.lab-tls-next
+  install -o 10001 -g 10001 -m 0600 -- "$source" "$staging"
+  mv -fT -- "$staging" "$target"
+}
+
+# pending 記錄跨兩個目錄的安裝進度，讓中斷後的排程能一起還原。
 pending=$state/pending
 dirs=(secrets/public-tls secrets/tls)
 for dir in "${dirs[@]}"; do
@@ -40,15 +46,21 @@ recover() (
   if [[ $(docker inspect -f '{{index .Config.Labels "lab.tls"}}' "$validator" 2>/dev/null) == validation ]]; then
     docker rm -f "$validator" >/dev/null
   fi
+  if [[ -f $pending/preparing ]]; then
+    # 驗證尚未動過線上 PEM 或模式，不必觸碰已在服務的 Nginx。
+    rm -rf -- "$pending"
+    exit 0
+  fi
   for dir in "${dirs[@]}"; do
     for file in cert.pem key.pem; do
       old="$pending/${dir##*/}-$file"
       if [[ -f $old ]]; then
-        cp -p -- "$old" "$dir/$file"
+        replace_pem "$old" "$dir/$file"
       else
         rm -f -- "$dir/$file"
       fi
     done
+    rm -f -- "$dir/.lab-tls-next"
   done
   if [[ -f $pending/active ]]; then
     cp "$pending/active" "$state/active.tmp"
@@ -57,7 +69,11 @@ recover() (
     rm -f "$state/active"
   fi
   if [[ -f $pending/was-running ]]; then
-    load_gateway
+    # 相容舊腳本因停站後中斷而留下的 pending。
+    if [[ -z $(lab ps --status running -q gateway) ]]; then lab start gateway; fi
+    reload_gateway
+  elif [[ -f $pending/reload ]]; then
+    reload_gateway
   fi
   rm -rf -- "$state/restored"
   mv "$pending" "$state/restored"
@@ -68,19 +84,24 @@ if [[ -d $pending ]]; then
 fi
 mode=${1:-}
 if [[ $mode == renew ]]; then
-  [[ -f $state/active ]] || die '請先完成 IP 憑證安裝'
+  [[ -f $state/active ]] || die '請先執行 lab-tls sites 安裝網站憑證'
   mode=$(<"$state/active")
 fi
-case "$mode" in ip|domain|dual) ;; *) die '用法：tls.sh ip | domain | dual | renew' ;; esac
-ip='' domain=''
-request=()
+case "$mode" in sites|ip|domain|dual) ;; *) die '用法：lab-tls sites | renew（舊部署亦支援 ip、domain、dual）' ;; esac
+ip=''
+identities=()
 days=14
-if [[ $mode != ip ]]; then
+if [[ $mode == sites ]]; then
+  identities=(casino.ye.wang crab.ye.wang)
+  # 獨立儲存名稱，切換失敗時舊模式仍能使用原有憑證續期。
+  cert_name=lab-sites
+elif [[ $mode != ip ]]; then
   domain=$(<"$state/domain")
   [[ $domain =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+$ ]] || die '請填寫完整域名'
-  request=(--domains "$domain")
+  identities+=("$domain")
+  cert_name=$domain
 fi
-if [[ $mode != domain ]]; then
+if [[ $mode == ip || $mode == dual ]]; then
   ip=$(<"$state/ip")
   [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die '請填寫 SAS 的公網 IPv4'
   IFS=. read -ra octets <<< "$ip"
@@ -88,12 +109,13 @@ if [[ $mode != domain ]]; then
     [[ $part == 0 || $part != 0* ]] && (( 10#$part <= 255 )) || die 'IPv4 各段須為 0 至 255'
   done
   days=3
-  request+=(--domains "$ip" --profile shortlived)
+  identities+=("$ip")
+  if [[ $mode == ip ]]; then cert_name=$ip; else cert_name=lab-dual; fi
 fi
-cert_name=${domain:-$ip}
-if [[ $mode == dual ]]; then
-  # lego 預設以第一個域名命名。獨立名稱讓三種模式共用 ACME 帳戶，並各自保留可供切換的憑證。
-  cert_name=lab-dual
+request=()
+for name in "${identities[@]}"; do request+=(--domains "$name"); done
+if [[ -n $ip ]]; then request+=(--profile shortlived); fi
+if [[ $mode == dual || $mode == sites ]]; then
   request+=(--cert.name "$cert_name" --force-cert-domains)
 fi
 email=$(<"$state/email")
@@ -115,19 +137,35 @@ served_identity() {
   [[ $seen == "$expected" ]]
 }
 serving() {
-  local expected port
+  local expected port name
   expected=$(fingerprint -in "$cert") || return 1
   for port in 443 27182; do
-    # 用域名時傳 SNI，直接用 IP 時不傳。兩種握手都須收到已安裝的同一張憑證。
-    if [[ -n $domain ]]; then served_identity "$port" "$expected" -servername "$domain" -verify_hostname "$domain" || return 1; fi
-    if [[ -n $ip ]]; then served_identity "$port" "$expected" -noservername -verify_ip "$ip" || return 1; fi
+    # 每個網址在兩個入口都要送出同一張憑證。只有舊模式的裸 IP 不傳 SNI。
+    for name in "${identities[@]}"; do
+      if [[ $name == "$ip" ]]; then
+        served_identity "$port" "$expected" -noservername -verify_ip "$ip" || return 1
+      else
+        served_identity "$port" "$expected" -servername "$name" -verify_hostname "$name" || return 1
+      fi
+    done
   done
 }
 verify_identities() {
   # 分別檢查 DNS 與 IP，快取、簽發後及到期窗口一律套用同一組身份規則。
+  local name actual expected flag
   local verify=(openssl verify "$@" -purpose sslserver -CAfile "$trust" -untrusted "$cert")
-  if [[ -n $domain ]]; then "${verify[@]}" -verify_hostname "$domain" "$cert" || return 1; fi
-  if [[ -n $ip ]]; then "${verify[@]}" -verify_ip "$ip" "$cert" || return 1; fi
+  if [[ $mode == sites ]]; then
+    # verify_hostname 也接受萬用字元。正式憑證的 SAN 須精確列出兩個網站，可任意排序。
+    actual=$(openssl x509 -in "$cert" -noout -ext subjectAltName | sed '1d' | tr ',' '\n' |
+      sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | LC_ALL=C sort) || return 1
+    expected=$(printf 'DNS:%s\n' "${identities[@]}" | LC_ALL=C sort) || return 1
+    [[ $actual == "$expected" ]] || return 1
+  fi
+  for name in "${identities[@]}"; do
+    flag=-verify_hostname
+    if [[ $name == "$ip" ]]; then flag=-verify_ip; fi
+    "${verify[@]}" "$flag" "$name" "$cert" || return 1
+  done
 }
 fresh() {
   [[ -s $cert && ! -L $cert ]] || return 1
@@ -147,7 +185,9 @@ verify_pair() {
 running=$(lab ps --status running -q gateway)
 if [[ -n $running ]]; then
   lab exec -T gateway sh -c 'test "$LAB_HTTP_TEST" = false' || die '先完成 HTTP 測試入口切換'
-elif [[ $mode != ip || ${1:-} == renew || ( -e $state/active && $(<"$state/active") != "$mode" ) ]]; then
+  lab exec -T gateway grep -Fxq 'include /etc/lab/acme-stream.conf;' /tmp/nginx.conf ||
+    die '請先依部署手冊更新支援線上續期的 gateway'
+elif [[ ( $mode != sites && $mode != ip ) || ${1:-} == renew || ( -e $state/active && $(<"$state/active") != "$mode" ) ]]; then
   die 'gateway 未運行，請檢查服務'
 fi
 
@@ -187,28 +227,34 @@ for dir in "${dirs[@]}"; do
   done
 done
 if [[ -f $state/active ]]; then cp "$state/active" "$tmp/backup/active"; fi
-if [[ -n $running ]]; then touch "$tmp/backup/was-running"; fi
+touch "$tmp/backup/preparing"
+if [[ -n $running ]]; then touch "$tmp/backup/reload"; fi
 mv "$tmp/backup" "$pending"
 
 if "$issue"; then
-  # 只有真正需要簽發才讓出 443。不得停用佔用該端口的其他應用。
-  if [[ -n $running ]]; then lab stop gateway; fi
+  # 網站上線後由 gateway 分流。首次上線前才由 lego 直接綁定公網 443。
+  if [[ -n $running ]]; then
+    network=(--network lab-backend_edge)
+  else
+    network=(-p 0.0.0.0:443:8443)
+  fi
   timeout -k 15s 5m docker run --rm --name "$validator" --label lab.tls=validation \
     --pull=never --read-only --cap-drop ALL --security-opt no-new-privileges \
     --user 10001:10001 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-    -p 0.0.0.0:443:8443 --mount "type=bind,src=$state/lego,dst=/state" \
+    "${network[@]}" --mount "type=bind,src=$state/lego,dst=/state" \
     "$image" run --accept-tos --email "$email" --path /state "${request[@]}" \
     --tls --tls.address :8443 --ari-disable --renew-days "$((days + 1))" --no-random-sleep
   fresh || die '未取得新的有效期，保留上次部署'
   verify_pair
 fi
 
+rm -- "$pending/preparing"
 for dir in "${dirs[@]}"; do
-  install -o 10001 -g 10001 -m 0600 "$cert" "$dir/cert.pem"
-  install -o 10001 -g 10001 -m 0600 "$key" "$dir/key.pem"
+  replace_pem "$cert" "$dir/cert.pem"
+  replace_pem "$key" "$dir/key.pem"
 done
 if [[ -n $running ]]; then
-  load_gateway
+  reload_gateway
   for attempt in {1..10}; do
     if serving; then break; fi
     sleep 1

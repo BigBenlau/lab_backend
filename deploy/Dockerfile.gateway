@@ -3,6 +3,7 @@ COPY admin_frontend/admin /srv/admin
 COPY public_frontend/dist/lab.html /srv/code/index.html
 COPY public_frontend/dist/lab.js public_frontend/dist/api.js public_frontend/dist/lab.css public_frontend/dist/gold.css /srv/code/
 COPY deploy/nginx.conf.template /etc/lab/nginx.conf.template
+COPY deploy/acme-stream.conf /etc/lab/acme-stream.conf
 COPY deploy/gateway-entrypoint.sh /etc/lab/entrypoint.sh
 # 程式與設定保留root擁有、讓執行帳戶可讀；腳本由/bin/sh讀取，不需執行位元。
 RUN chmod 0755 /srv /etc/nginx \
@@ -13,5 +14,7 @@ USER 10001:10001
 RUN test -x /etc/nginx && test -x /srv/code && test -x /srv/admin && test -x /etc/lab \
     && for file in /etc/nginx/mime.types /etc/lab/* /srv/code/* /srv/admin/*; do \
          test -r "$file" || exit 1; \
-       done
+       done \
+    && printf '%s\n' 'pid /tmp/nginx.pid; error_log stderr; events {} include /etc/lab/acme-stream.conf;' > /tmp/check-stream.conf \
+    && nginx -t -e stderr -c /tmp/check-stream.conf && rm /tmp/check-stream.conf
 ENTRYPOINT ["/bin/sh", "/etc/lab/entrypoint.sh"]

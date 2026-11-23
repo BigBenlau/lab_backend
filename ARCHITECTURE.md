@@ -96,9 +96,9 @@ public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或
 
 來源IP僅由Cloud防火牆／安全組管理，程式無IP清單。部署前限制管理端口、確認規則套用實際VPS／網卡；非標準端口不能取代登入或防火牆。僅IPv4直接連VPS，不經CDN或額外代理、不配置AAAA；驗證允許與不允許的來源，不能只看UFW。
 
-正式 HTTPS 先以公網 IPv4 提供官網 443 與後台 27182，域名解析就緒後，兩個入口一起切換至域名憑證。同一對完整憑證鏈及私鑰安裝到 secrets/public-tls 與 secrets/tls，兩處均唯讀掛載至 gateway。Cookie 可跨同主機端口，公開代理清除 Cookie，管理寫入仍檢查含端口的 Origin 及 CSRF。憑證金鑰、Cookie、執行庫／journal、匯出與備份須留在私人儲存。
+正式 HTTPS 使用一張含 `casino.ye.wang` 和 `crab.ye.wang` 的 DNS SAN 憑證。兩個名稱開啟同一個官網（443），管理頁沿用這兩個名稱及 27182。完整憑證鏈及私鑰安裝到 secrets/public-tls 與 secrets/tls，兩處均唯讀掛載至 gateway。Cookie 可跨同主機端口，公開代理清除 Cookie，管理寫入仍檢查含端口的 Origin 及 CSRF。憑證金鑰、Cookie、執行庫／journal、匯出與備份須留在私人儲存。
 
-deploy/tls.sh 協調按需執行的 Docker lego。TLS-ALPN-01 透過公網 443 驗證。ip 與 dual 模式使用 shortlived profile。dual 將域名及公網 IPv4 列入同一張憑證，使用獨立的 lego 儲存名稱，保留兩種單一識別模式的憑證。實際簽發時短暫停止 gateway，兩個 API 與資料庫可繼續運作。工具持鎖核對信任鏈及配對私鑰，再以各個啟用的身份在兩個端口檢查憑證指紋。首次啟動前只能檢查本地檔案。手冊提供由帳號 B 啟用的 OOS 排程範本，不掛 Docker socket。雲端排程及真實續期須在目標環境確認。[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)
+`deploy/tls.sh sites` 用 Docker lego 的獨立快取一次申請兩個域名。切換成功後才更新 `active`，既有排程以 `renew` 接手。舊 `ip`、`domain`、`dual` 模式可在切換前繼續續期。上線後，gateway 僅將 443 上宣告 `acme-tls/1` 的專用握手分流到 edge 網路的臨時 lego。一般流量由 loopback 官網 TLS listener 處理，公開 API 按訪客來源 IP 限流。管理入口直接處理 TLS。首次上線前由 lego 直接綁定 443。工具持鎖核對 SAN、信任鏈與配對私鑰，更新兩處 PEM 並平滑重載，再以每個域名核對兩個端口的憑證指紋。帳號 B 選擇 OOS 或主機 cron 每 6 小時觸發續期檢查。[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)
 
 DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 

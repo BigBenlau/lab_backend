@@ -150,10 +150,16 @@ assert 'admin-allowlist' not in nginx and 'limit_req zone=login_rate' in nginx
 assert 'location ~ ^/api/v1/(auth|admin)/' in nginx and 'location /api/ { return 404; }' in nginx
 assert services['gateway']['environment'] == {'LAB_HTTP_TEST': 'false'}
 assert services['gateway']['environment']['LAB_HTTP_TEST'] == 'false'
+stream = (ROOT / 'deploy/acme-stream.conf').read_text()
+assert 'listen 8443;' in stream and 'ssl_preread on;' in stream
+assert re.search(r'~\^acme-tls/1\$\s+127\.0\.0\.1:8445;', stream)
+assert re.search(r'default\s+127\.0\.0\.1:8444;', stream)
+assert 'listen 127.0.0.1:8445 proxy_protocol;' in stream and 'set $validator lab-tls-validation:8443;' in stream
+assert 'limit_req_zone $public_client zone=public_api:' in common
 entrypoint = (ROOT / 'deploy/gateway-entrypoint.sh').read_text()
 assert 'ADMIN_ALLOW_CIDRS' not in entrypoint and 'nginx -t -c /tmp/nginx.conf' in entrypoint
 assert 'write_transport /tmp/admin-transport.conf "$admin_port" /run/tls' in entrypoint
-assert 'write_transport /tmp/public-transport.conf "$PUBLIC_LISTEN_PORT" /run/public-tls' in entrypoint
+assert 'write_transport /tmp/public-transport.conf "$public_listener" /run/public-tls' in entrypoint
 
 # 官網只讀 public 子目錄；API 路徑白名單不得擴張到管理或探測端點。
 web = services['gateway']
@@ -227,7 +233,7 @@ for config in (common,):
 build_ignore = [line for line in (ROOT / '.dockerignore').read_text().splitlines() if line and not line.startswith('#')]
 build_dirs = {'lab_backend', 'scripts', 'admin_frontend', 'admin_frontend/admin', 'deploy',
               'public_frontend', 'public_frontend/dist'}
-build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py',
+build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py', 'deploy/acme-stream.conf',
                'deploy/Dockerfile', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh'}
 build_files.update(str(path.relative_to(ROOT)) for path in (ROOT / 'lab_backend').glob('*.py'))
 build_files.update('admin_frontend/admin/' + name for name in ('index.html', 'app.js', 'style.css'))
@@ -249,7 +255,7 @@ for directory in ('public_frontend', 'deploy', 'admin_frontend', 'lab_backend', 
 gateway_docker = (ROOT / 'deploy/Dockerfile.gateway').read_text()
 # 合併映像只複製兩個前端程式及入口設定，仍不能帶入Python、初始化來源或憑證。
 gateway_sources = {source for line in gateway_docker.splitlines() if line.startswith('COPY ') for source in line.split()[1:-1]}
-assert gateway_sources == {'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh'} | {
+assert gateway_sources == {'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/gateway-entrypoint.sh'} | {
     'public_frontend/dist/' + name for name in ('lab.html', 'lab.js', 'api.js', 'lab.css', 'gold.css')}
 for old_file in ('Dockerfile', 'nginx.conf', 'nginx-http.conf', 'nginx-https.conf'):
     assert not (ROOT / 'public_frontend' / old_file).exists(), '舊版部署入口不再維護'

@@ -35,7 +35,7 @@ class GatewaySettingsTests(unittest.TestCase):
                               .replace('/tmp/', str(self.root) + '/'))
         # 替身只記錄呼叫及模擬設定檢查失敗，不開socket、不解析真實憑證。
         for name, body in {
-            'envsubst': 'cat',
+            'envsubst': r"""sed -e 's|${PUBLIC_LISTEN_PORT}|'"$PUBLIC_LISTEN_PORT"'|g' -e 's|${ACME_STREAM_INCLUDE}|'"$ACME_STREAM_INCLUDE"'|g'""",
             'nginx': 'printf "%s\\n" "$*" >> "$GATEWAY_CALLS"\n'
                      'if [ "$1" = "-t" ]; then exit "${GATEWAY_CHECK_EXIT:-0}"; fi',
         }.items():
@@ -60,7 +60,10 @@ class GatewaySettingsTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(calls[0].startswith('-t -c '))
         self.assertTrue(calls[1].endswith('-g daemon off;'))
-        for name, port, tls_path in (('admin', 27182, '/run/tls'), ('public', 8443, '/run/public-tls')):
+        config = (self.root / 'nginx.conf').read_text()
+        self.assertIn('include /etc/lab/acme-stream.conf;', config)
+        self.assertIn('8444 "default-src', config)
+        for name, port, tls_path in (('admin', '27182', '/run/tls'), ('public', '127.0.0.1:8444 proxy_protocol', '/run/public-tls')):
             transport = (self.root / f'{name}-transport.conf').read_text()
             self.assertIn(f'listen {port} ssl default_server;', transport)
             self.assertIn(f'ssl_certificate {tls_path}/cert.pem;', transport)
@@ -77,6 +80,9 @@ class GatewaySettingsTests(unittest.TestCase):
         """HTTP移除兩組憑證，管理端內外27181一致；切回後恢復TLS。"""
         result = self.run_entry(LAB_HTTP_TEST='true')
         self.assertEqual(result.returncode, 0, result.stderr)
+        config = (self.root / 'nginx.conf').read_text()
+        self.assertNotIn('acme-stream.conf', config)
+        self.assertIn('8080 "default-src', config)
         for name, port in (('admin', 27181), ('public', 8080)):
             self.assertEqual((self.root / f'{name}-transport.conf').read_text(), f'listen {port} default_server;\n')
         self.assertEqual(self.run_entry().returncode, 0)
@@ -139,7 +145,7 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
 
     def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
-        for name in ('deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh',
+        for name in ('deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/gateway-entrypoint.sh',
                      'admin_frontend/admin/index.html', 'admin_frontend/admin/app.js', 'admin_frontend/admin/style.css',
                      'public_frontend/dist/lab.html', 'public_frontend/dist/lab.js', 'public_frontend/dist/api.js',
                      'public_frontend/dist/lab.css', 'public_frontend/dist/gold.css'):

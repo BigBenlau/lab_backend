@@ -1,7 +1,8 @@
 worker_processes 1;
 pid /tmp/nginx.pid;
 error_log /dev/stderr crit;
-events { worker_connections 512; }
+events { worker_connections 2048; }
+${ACME_STREAM_INCLUDE}
 http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
@@ -19,7 +20,12 @@ http {
     client_header_timeout 10s;
     keepalive_timeout 20s;
     send_timeout 15s;
-    limit_req_zone $binary_remote_addr zone=public_api:1m rate=10r/s;
+    # 正式官網只在 loopback 接收分流器附上的來源。HTTP 測試直接使用連線來源。
+    map $proxy_protocol_addr $public_client {
+        ""      $binary_remote_addr;
+        default $proxy_protocol_addr;
+    }
+    limit_req_zone $public_client zone=public_api:1m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=admin_rate:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=login_rate:1m rate=6r/m;
     limit_req_status 429;
