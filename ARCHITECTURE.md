@@ -98,7 +98,7 @@ public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或
 
 正式 HTTPS 先以公網 IPv4 提供官網 443 與後台 27182，域名解析就緒後，兩個入口一起切換至域名憑證。同一對完整憑證鏈及私鑰安裝到 secrets/public-tls 與 secrets/tls，兩處均唯讀掛載至 gateway。Cookie 可跨同主機端口，公開代理清除 Cookie，管理寫入仍檢查含端口的 Origin 及 CSRF。憑證金鑰、Cookie、執行庫／journal、匯出與備份須留在私人儲存。
 
-deploy/tls.sh 協調按需執行的 Docker lego。TLS-ALPN-01 直接驗證 443，IP 使用 shortlived profile。實際簽發時短暫停止 gateway，兩個 API 與資料庫可繼續運作。工具持鎖核對身份、信任鏈、配對私鑰及兩個在線指紋，保留可恢復的舊 PEM 與目前模式。首次啟動前只能檢查本地檔案。手冊提供由帳號 B 啟用的 OOS 排程範本，不掛 Docker socket。雲端排程及真實續期須在目標環境確認。[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)
+deploy/tls.sh 協調按需執行的 Docker lego。TLS-ALPN-01 透過公網 443 驗證。ip 與 dual 模式使用 shortlived profile。dual 將域名及公網 IPv4 列入同一張憑證，使用獨立的 lego 儲存名稱，保留兩種單一識別模式的憑證。實際簽發時短暫停止 gateway，兩個 API 與資料庫可繼續運作。工具持鎖核對信任鏈及配對私鑰，再以各個啟用的身份在兩個端口檢查憑證指紋。首次啟動前只能檢查本地檔案。手冊提供由帳號 B 啟用的 OOS 排程範本，不掛 Docker socket。雲端排程及真實續期須在目標環境確認。[部署手冊](docs/OPERATIONS.md#https憑證與自動續期)
 
 DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 

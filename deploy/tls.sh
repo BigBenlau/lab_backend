@@ -71,60 +71,74 @@ if [[ $mode == renew ]]; then
   [[ -f $state/active ]] || die '請先完成 IP 憑證安裝'
   mode=$(<"$state/active")
 fi
-case "$mode" in
-  ip)
-    target=$(<"$state/ip")
-    [[ $target =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die '請填寫 SAS 的公網 IPv4'
-    IFS=. read -ra octets <<< "$target"
-    for part in "${octets[@]}"; do
-      [[ $part == 0 || $part != 0* ]] && (( 10#$part <= 255 )) || die 'IPv4 各段須為 0 至 255'
-    done
-    days=3
-    identity=(-verify_ip "$target")
-    sni=(-noservername)
-    request=(--domains "$target" --profile shortlived)
-    ;;
-  domain)
-    target=$(<"$state/domain")
-    [[ $target =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+$ ]] || die '請填寫完整域名'
-    days=14
-    identity=(-verify_hostname "$target")
-    sni=(-servername "$target")
-    request=(--domains "$target")
-    ;;
-  *) die '用法：tls.sh ip | domain | renew' ;;
-esac
+case "$mode" in ip|domain|dual) ;; *) die '用法：tls.sh ip | domain | dual | renew' ;; esac
+ip='' domain=''
+request=()
+days=14
+if [[ $mode != ip ]]; then
+  domain=$(<"$state/domain")
+  [[ $domain =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+$ ]] || die '請填寫完整域名'
+  request=(--domains "$domain")
+fi
+if [[ $mode != domain ]]; then
+  ip=$(<"$state/ip")
+  [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die '請填寫 SAS 的公網 IPv4'
+  IFS=. read -ra octets <<< "$ip"
+  for part in "${octets[@]}"; do
+    [[ $part == 0 || $part != 0* ]] && (( 10#$part <= 255 )) || die 'IPv4 各段須為 0 至 255'
+  done
+  days=3
+  request+=(--domains "$ip" --profile shortlived)
+fi
+cert_name=${domain:-$ip}
+if [[ $mode == dual ]]; then
+  # lego 預設以第一個域名命名。獨立名稱讓三種模式共用 ACME 帳戶，並各自保留可供切換的憑證。
+  cert_name=lab-dual
+  request+=(--cert.name "$cert_name" --force-cert-domains)
+fi
 email=$(<"$state/email")
-cert="$state/lego/certificates/$target.crt"
-key="$state/lego/certificates/$target.key"
+cert="$state/lego/certificates/$cert_name.crt"
+key="$state/lego/certificates/$cert_name.key"
 window=$((days * 86400))
 install -d -m 0700 -o 10001 -g 10001 "$state/lego"
 
 # 核對實際送出的葉憑證、身份、信任鏈。連到本機映射，公網防火牆另從外部核對。
 fingerprint() { openssl x509 "$@" -noout -fingerprint -sha256; }
+served_identity() {
+  local port=$1 expected=$2 seen
+  shift 2
+  # 讀完整握手回應，僅把公開憑證交給 x509。
+  seen=$(timeout 8 openssl s_client -connect "127.0.0.1:$port" "$@" \
+    -verify_return_error -CAfile "$trust" </dev/null 2>/dev/null |
+    sed -n '/^-----BEGIN CERTIFICATE-----$/,/^-----END CERTIFICATE-----$/p' |
+    fingerprint) || return 1
+  [[ $seen == "$expected" ]]
+}
 serving() {
-  local expected seen port
+  local expected port
   expected=$(fingerprint -in "$cert") || return 1
   for port in 443 27182; do
-    # 讀完整份握手輸出，僅把第一張公開憑證交給 x509，避免管道提前關閉。
-    seen=$(timeout 8 openssl s_client -connect "127.0.0.1:$port" "${sni[@]}" "${identity[@]}" \
-      -verify_return_error -CAfile "$trust" </dev/null 2>/dev/null |
-      sed -n '/^-----BEGIN CERTIFICATE-----$/,/^-----END CERTIFICATE-----$/p' |
-      fingerprint) || return 1
-    [[ $seen == "$expected" ]] || return 1
+    # 用域名時傳 SNI，直接用 IP 時不傳。兩種握手都須收到已安裝的同一張憑證。
+    if [[ -n $domain ]]; then served_identity "$port" "$expected" -servername "$domain" -verify_hostname "$domain" || return 1; fi
+    if [[ -n $ip ]]; then served_identity "$port" "$expected" -noservername -verify_ip "$ip" || return 1; fi
   done
+}
+verify_identities() {
+  # 分別檢查 DNS 與 IP，快取、簽發後及到期窗口一律套用同一組身份規則。
+  local verify=(openssl verify "$@" -purpose sslserver -CAfile "$trust" -untrusted "$cert")
+  if [[ -n $domain ]]; then "${verify[@]}" -verify_hostname "$domain" "$cert" || return 1; fi
+  if [[ -n $ip ]]; then "${verify[@]}" -verify_ip "$ip" "$cert" || return 1; fi
 }
 fresh() {
   [[ -s $cert && ! -L $cert ]] || return 1
   # 在續期門檻的未來時間驗證整條鏈，直接用 verify 的退出碼判斷。
   local deadline
   deadline=$(( $(date +%s) + window ))
-  openssl verify -attime "$deadline" -purpose sslserver "${identity[@]}" \
-    -CAfile "$trust" -untrusted "$cert" "$cert" >/dev/null 2>&1
+  verify_identities -attime "$deadline" >/dev/null 2>&1
 }
 verify_pair() {
   [[ -f $cert && ! -L $cert && -f $key && ! -L $key ]] || die '憑證及私鑰必須為普通檔案'
-  openssl verify -purpose sslserver "${identity[@]}" -CAfile "$trust" -untrusted "$cert" "$cert"
+  verify_identities
   openssl x509 -in "$cert" -noout -pubkey > "$tmp/cert.pub"
   openssl pkey -in "$key" -pubout > "$tmp/key.pub"
   cmp -s "$tmp/cert.pub" "$tmp/key.pub"
@@ -133,7 +147,7 @@ verify_pair() {
 running=$(lab ps --status running -q gateway)
 if [[ -n $running ]]; then
   lab exec -T gateway sh -c 'test "$LAB_HTTP_TEST" = false' || die '先完成 HTTP 測試入口切換'
-elif [[ $mode == domain || ${1:-} == renew || ( -e $state/active && $(<"$state/active") != "$mode" ) ]]; then
+elif [[ $mode != ip || ${1:-} == renew || ( -e $state/active && $(<"$state/active") != "$mode" ) ]]; then
   die 'gateway 未運行，請檢查服務'
 fi
 

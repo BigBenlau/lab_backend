@@ -6,7 +6,8 @@
 |---|---|
 | 首次 IP 上線 | B 依步驟 1–6 申請 IP 憑證、安裝、啟動並測試。 |
 | 持續用 IP | B 啟用下方的雲端排程，每 6 小時檢查。IP 憑證有效 160 小時。 |
-| 切換域名 | A 調整根域名 A 記錄。B 確認解析後簽發域名憑證，原排程接手域名續期。 |
+| 域名與 IP 都要使用 | A 設定根域名 A 記錄後，B 依第二階段執行 `lab-tls dual`，原排程續簽同一張包含兩個識別的憑證。 |
+| 只用域名 | 在第二階段選 `lab-tls domain`，原排程接手域名續期。 |
 
 部署指令均在 SAS 專案根目錄執行，另有標明的控制台與外部測試除外。下文 `203.0.113.10` 及聯絡信箱是佔位值。已有資料的主機先看[既有環境切換](#既有環境切換)。[Let’s Encrypt IP 憑證](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)
 
@@ -187,14 +188,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' "https://$SAS_IPV4:27182/api/v1/auth/s
 
 ### HTTPS憑證與自動續期
 
-**B 只需啟用一個 `renew` 任務。** 本機工具會讀取 `/var/lib/lab-tls/active`，第一次安裝成功後是 `ip`，成功切換域名後才變為 `domain`。以檔案鎖序列化首次簽發、續期及切換。先在 SAS 手動驗證排程即將執行的同一條命令。
+**B 只需啟用一個 `renew` 任務。** 工具讀取 `/var/lib/lab-tls/active` 選擇 `ip`、`domain` 或 `dual`。切換入口並核對成功後才會寫入新模式。檔案鎖會讓簽發、續期及切換依次執行。先在 SAS 手動驗證排程使用的命令。
 
 ```sh
 sudo cat /var/lib/lab-tls/active
 sudo /usr/local/sbin/lab-tls renew
 ```
 
-IP 憑證有效 160 小時。排程每 6 小時檢查，剩餘 72 小時內開始續簽，失敗仍有重試時間。域名模式的門檻是 14 天。每次檢查都核對本地憑證及兩端口實際送出的指紋。尚未到期且版本一致時會輸出「兩個端口已使用有效版本」，不會重啟 gateway。已簽發但尚未交付的憑證會優先安裝，避免反覆申請。[Let’s Encrypt 短效憑證](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)
+`ip` 與 `dual` 憑證有效 160 小時。排程每 6 小時檢查，剩餘 72 小時內開始續簽。僅域名的 `domain` 模式門檻為 14 天。每次檢查均核對本地憑證及兩個端口實際送出的憑證。輸出「兩個端口已使用有效版本」時服務會持續在線。已簽發但尚未交付的憑證會優先安裝。[Let’s Encrypt 短效憑證](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)
 
 **實際續簽時會短暫停站。** 腳本備份兩個掛載目錄的 PEM 與目前模式，僅停止共用 gateway，兩個 API 和 SQLite 繼續運作。lego 完成 443 驗證後，腳本檢查信任鏈、IP 或域名及配對私鑰，更新兩個掛載，啟動 gateway、執行 `nginx -t` 和 reload，並從主機對 443、27182 做 TLS 握手。Nginx 共用程序，因此官網及後台都會受到這個窗口影響。`--renew-days` 配合本機剩餘時間門檻，讓排程掌握讓出 443 的時機。[lego 選項](https://go-acme.github.io/lego/references/ref-flags/) · [Nginx 重載](https://nginx.org/en/docs/control.html)
 
@@ -256,7 +257,7 @@ Tasks:
     Delay: 10
 ```
 
-4. 在 OOS 執行詳情核對首輪的 `send` 和 `result`，之後確認下一輪也有啟動。為任務失敗設定維護者通知，並由獨立監測從管理來源檢查兩端可用性及到期時間，可設 IP 到期前 48 小時、域名到期前 7 天告警。若 OOS 執行停止或到達結束日期，需重新啟用。只要尚未啟動這項雲端任務，手動 `renew` 或 `docker compose up` 都不會自行排程。
+4. 在 OOS 執行詳情核對首輪的 `send` 和 `result`，之後確認下一輪也有啟動。為任務失敗設定維護者通知，並由獨立監測從管理來源檢查兩端可用性及到期時間，可設 `ip`／`dual` 到期前 48 小時、`domain` 到期前 7 天告警。若 OOS 執行停止或到達結束日期，需重新啟用。只要尚未啟動這項雲端任務，手動 `renew` 或 `docker compose up` 都不會自行排程。
 
 ## 第二階段　A 設定 ye.wang，B 切換憑證
 
@@ -272,21 +273,36 @@ dig @1.1.1.1 +short AAAA ye.wang
 dig @8.8.8.8 +short AAAA ye.wang
 ```
 
-3. **B 在 SAS 申請一張域名憑證並切換兩個入口。** 下列命令執行相同的 `docker run` 流程，但申請對象改為 `--domains ye.wang` 並使用域名憑證的預設 profile。原 IP 憑證和 ACME 狀態仍留在私人目錄。工具以 `-verify_hostname ye.wang` 驗證新憑證及兩個入口，成功後才提交 `active=domain`。同一個 OOS 任務此後只更新域名，兩階段共用同一資料 volume，略過 `init`、`seed`。
+3. **B 在 SAS 申請同時涵蓋域名和 IP 的憑證。** 適用於已用 IP 或域名提供 HTTPS 的站點。把新版 `deploy/tls.sh` 同步到 SAS 專案根目錄下的 `deploy/`，確認 `ps` 中的 gateway 正在運行，並核對 `ip` 檔與上述 A 記錄一致。安裝新版主機腳本後，選可以短暫停站的時間執行 `dual`。
 
 ```sh
+sudo sh deploy/lab.sh ps
+sudo cat /var/lib/lab-tls/ip
+sudo install -o root -g root -m 0700 deploy/tls.sh /usr/local/sbin/lab-tls
 printf '%s\n' 'ye.wang' | sudo tee /var/lib/lab-tls/domain >/dev/null
-sudo /usr/local/sbin/lab-tls domain
+sudo /usr/local/sbin/lab-tls dual
+```
+
+看到「已安裝 dual 憑證」後核對目前模式、兩個識別及到期日。
+
+```sh
 sudo cat /var/lib/lab-tls/active
+sudo openssl x509 -in secrets/public-tls/cert.pem -noout -ext subjectAltName -enddate
 sudo /usr/local/sbin/lab-tls renew
 ```
 
-4. **B 從允許來源透過一般 DNS 驗證。** 下列命令依序應得 200、200、401。瀏覽器分別開啟 `https://ye.wang/` 及 `https://ye.wang:27182/`。域名憑證只申請 `ye.wang`，切換後以域名存取；用裸 IP 連線會出現名稱不符。IP 階段的登入 Cookie 屬於原主機，管理員須以新網址重新登入。
+應看到模式 `dual`、`DNS:ye.wang` 及 `IP Address:你的公網IP`。腳本讓 lego 用同一個帳戶送出包含兩個識別的短效憑證訂單。它會先備份目前掛載的 PEM，再短暫停止 gateway 讓出 443，安裝後恢復兩個入口。官網和後台各以域名及裸 IP 核對一次。80 可繼續關閉，27182 維持管理員來源限制。既有每 6 小時一次的 OOS 任務會依 `active=dual` 接手續期。[lego 指令](https://go-acme.github.io/lego/references/ref-flags/) · [Let’s Encrypt 憑證規格](https://letsencrypt.org/docs/profiles/#shortlived)
+
+若只需要域名，選擇 `sudo /usr/local/sbin/lab-tls domain`。成功後模式為 `domain`，這張憑證只涵蓋 `ye.wang`。
+
+4. **B 從防火牆允許的外部電腦驗證。** 將示例 IP 換成 SAS 公網 IPv4。雙識別模式下，兩個主機名稱各自應得 200、200、401。IP 與域名各有獨立的登入 Cookie，初次從域名進入後台時需登入。
 
 ```sh
-curl -sS -o /dev/null -w '%{http_code}\n' https://ye.wang/api/home
-curl -sS -o /dev/null -w '%{http_code}\n' https://ye.wang:27182/
-curl -sS -o /dev/null -w '%{http_code}\n' https://ye.wang:27182/api/v1/auth/session
+for host in ye.wang 203.0.113.10; do
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$host/api/home"
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$host:27182/"
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$host:27182/api/v1/auth/session"
+done
 ```
 
 再從同一台外部電腦讀取兩個入口實際送出的域名憑證。兩個 SHA-256 指紋都應等於 B 在 SAS 對 `secrets/public-tls/cert.pem` 執行步驟 5 的 OpenSSL 指令所得的指紋。
