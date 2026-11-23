@@ -172,7 +172,7 @@ sh deploy/lab.sh admin-info
 sh deploy/lab.sh exec -T gateway nginx -t -c /tmp/nginx.conf
 ```
 
-預期三個常駐服務。只有 `gateway` 發布 IPv4 主機端口，官網 `443 → 8443`、管理 `27182 → 27182`。兩個 Python API 留在各自 Docker 內網。管理傳輸模式應為 `https`、Cookie 名稱 `__Host-lab_session`。正式設定沒有 HTTP 80 的監聽或跳轉。
+預期三個常駐服務。只有 `gateway` 發布 IPv4 主機端口，官網 `443 → 8443`、管理 `27182 → 27182`。兩個 Python API 留在各自 Docker 內網。管理傳輸模式應為 `https`、Cookie 名稱 `__Host-lab_session`。正式環境關閉 80，請使用 HTTPS 書籤。若瀏覽器明確連到 443 或 27182，但使用了 `http://`，gateway 會引導瀏覽器改用該入口的 HTTPS 網址。
 
 從**防火牆允許的外部工作電腦**用實際 IP 測試，保留 curl 的預設憑證驗證。預期官網 200、管理登入頁 200、未登入的管理 Session 401。在瀏覽器打開 `https://公網IP/` 和 `https://公網IP:27182/`，核對官網內容、PDF 以及管理登入／登出。從未獲准來源也要確認官網可用、27182 無法連線。
 
@@ -357,6 +357,25 @@ sh deploy/lab.sh up -d admin-api
 DB備份含五表並互動加密；靜態ZIP含assets、site.json及manifest，以版本、DB SHA256與逐檔SHA256配對，ZIP本身不加密。把匯出檔放異地，密碼分開保管；同volume備份不能防磁碟損毀。若先前啟用watch，完成後再啟動。備份目前需人工執行。
 
 ## 注意事項與排錯
+
+### 瀏覽器顯示「The plain HTTP request was sent to HTTPS port」
+
+這表示瀏覽器已連到正式端口，但使用了明文 HTTP。可以直接把網址開頭改為 `https://`。要讓既有部署自動轉址，將新版程式同步到 SAS 後，在專案根目錄重建 gateway 映像並替換容器。兩個頁面入口會短暫中斷。
+
+```sh
+sudo sh deploy/lab.sh build gateway
+sudo sh deploy/lab.sh up -d --no-deps --force-recreate gateway
+```
+
+從防火牆允許的電腦，用實際 IP 或已切換憑證的域名核對。以下使用文件示例 IP。
+
+```sh
+SITE=203.0.113.10
+curl -sSI "http://$SITE:443/api/home?view=recent"
+curl -sSI "http://$SITE:27182/"
+```
+
+兩次都應回應 `302`。官網的 `Location` 應為 `https://主機/api/home?view=recent`，後台則為 `https://主機:27182/`。轉址適用於 GET／HEAD，登入及其他明文寫入會回應 400。請直接在 HTTPS 頁面輸入帳密。省略端口的 `http://主機/` 會連向已關閉的 80。HTTP 測試模式仍使用原來的明文入口。
 
 ### 資料與容器位置
 

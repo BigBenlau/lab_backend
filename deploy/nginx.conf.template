@@ -27,6 +27,11 @@ http {
     proxy_cache off;
     resolver 127.0.0.11 valid=10s ipv6=off;
     map $scheme $hsts { https "max-age=31536000"; default ""; }
+    # 轉址沿用瀏覽器請求的 IPv4 或域名。對外端口由入口決定，不採用 Host 中的端口。
+    map $http_host $redirect_host {
+        default "";
+        "~*^([a-z0-9][a-z0-9.-]*)(?::[0-9]+)?$" $1;
+    }
     # 官網相簿需要行內CSS，管理頁不需要；按listener選擇，不信任請求Host。
     map $server_port $content_security_policy {
         default "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";

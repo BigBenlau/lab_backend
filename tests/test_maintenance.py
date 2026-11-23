@@ -66,6 +66,12 @@ class GatewaySettingsTests(unittest.TestCase):
             self.assertIn(f'ssl_certificate {tls_path}/cert.pem;', transport)
             self.assertIn(f'ssl_certificate_key {tls_path}/key.pem;', transport)
             self.assertIn('ssl_protocols TLSv1.2 TLSv1.3;', transport)
+            # 測試生成的外部網址，防止把官網容器端口 8443 或錯誤的管理端口交給瀏覽器。
+            suffix = ':27182' if name == 'admin' else ''
+            self.assertIn('error_page 497 = @https_navigation;', transport)
+            self.assertIn('if ($request_method !~ ^(GET|HEAD)$) { return 400; }', transport)
+            self.assertIn('if ($redirect_host = "") { return 400; }', transport)
+            self.assertIn(f'return 302 https://$redirect_host{suffix}$request_uri;', transport)
 
     def test_http_needs_no_certificate_and_switching_back_restores_tls(self):
         """HTTP移除兩組憑證，管理端內外27181一致；切回後恢復TLS。"""
