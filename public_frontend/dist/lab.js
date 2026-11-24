@@ -31,7 +31,7 @@ function image(id, cls='', priority=false) {
 function prose(value) {
   return String(value || '').split(/\n\s*\n/).filter(Boolean).map(block => block.split('\n').every(line=>line.startsWith('- ')) ? `<ul>${block.split('\n').map(line=>`<li>${esc(line.slice(2))}</li>`).join('')}</ul>` : `<p>${esc(block).replaceAll('\n','<br>')}</p>`).join('');
 }
-const heading = (title,description='',kicker=data.siteSettings.name) => `<header class="page-heading"><p class="eyebrow">${esc(kicker)}</p><h1>${esc(title)}</h1>${description?`<p>${esc(description)}</p>`:''}</header>`;
+const heading = (title,description='',kicker=data?.siteSettings?.name || 'CASINO Lab') => `<header class="page-heading"><p class="eyebrow">${esc(kicker)}</p><h1>${esc(title)}</h1>${description?`<p>${esc(description)}</p>`:''}</header>`;
 // 固定品牌名稱來自後端設定；文字仍先跳脫。
 const fullName = value => esc(value);
 function paperPage(p) {

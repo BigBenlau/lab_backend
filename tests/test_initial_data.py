@@ -51,6 +51,14 @@ class InitialDataTests(unittest.TestCase):
             (self.source / asset['url'].lstrip('/')).write_text('<svg/>')
         self.output = self.root / 'bundle'
 
+    def test_extra_assets_require_explicit_selection(self):
+        (self.source / 'assets/unused.pdf').write_bytes(b'%PDF')
+        prepare(self.source, self.output, True)
+        self.assertFalse((self.output / 'public/assets/unused.pdf').exists())
+        extra = self.root / 'second'
+        prepare(self.source, extra, True, ['assets/unused.pdf'])
+        self.assertTrue((extra / 'public/assets/unused.pdf').is_file())
+
     def save_source(self):
         """只在暫存目錄建立同名合成 JSON。"""
         (self.source / 'data/lab.json').write_text(json.dumps(self.snapshot))

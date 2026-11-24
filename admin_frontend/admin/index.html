@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>管理員登入 · Lab 內容管理</title>
+  <title>管理員登入 · CASINO Lab 內容管理</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -11,7 +11,8 @@
   <!-- 登入前只顯示此頁；管理介面待 Session 確認後才顯示。 -->
   <section id="login-page" class="login-page" aria-labelledby="login-title">
     <div class="login-intro">
-      <p class="eyebrow">LAB CONTENT MANAGER</p>
+      <img src="/casino-symbol.svg" width="96" height="83" alt="">
+      <p class="eyebrow">CASINO Lab</p>
       <h1>實驗室內容管理</h1>
       <p>維護團隊成員、研究成果與網站資訊。</p>
       <p class="login-caption">內容儲存後，即可在公開網站讀取。</p>
@@ -30,7 +31,7 @@
   <!-- 各功能使用 hash 路由，共用一份 HTML，重新整理仍回到同一頁。 -->
   <div id="admin-shell" hidden>
     <header class="app-header">
-      <h1>Lab 內容管理</h1>
+      <h1>CASINO Lab 內容管理</h1>
       <span id="identity"></span>
       <button id="logout" type="button">登出</button>
     </header>

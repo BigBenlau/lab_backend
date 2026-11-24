@@ -173,6 +173,11 @@ def backup_job(store, kind, version):
             raise
         else:
             entry.update(ok=True, lastSuccessAt=now())
+            if kind == 'snapshot':
+                # 三個檔案同時交付後才更新監測所讀的兩個狀態。
+                for part in ('database', 'static'):
+                    state[part] = {**entry.pop(part), 'version': version, 'at': entry['at'],
+                                   'ok': True, 'lastSuccessAt': entry['lastSuccessAt']}
             state[kind] = entry
             atomic_json(store.admin_path.parent / 'backup-status.json', state)
 
@@ -187,13 +192,18 @@ def backup(store, output: Path, version=None):
 def _database_backup(store, output: Path):
     """讀取同一跨庫交易快照，以 CSV 交換格式加密打包。"""
     password = password_prompt('備份加密密碼')
-    state = store.read(include_audit=True)
+    return write_database_backup(store.read(include_audit=True), output, password)
+
+
+def write_database_backup(state, output, password):
+    """沿用 LABSQL10；排程的 JSON 與加密備份共用呼叫端已讀取的同一快照。"""
+    validate_state(state)
     validate_capacity(state)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
         for resource, name in FILES.items():
             archive.writestr(name, encode_csv(resource, state[resource]))
-        if sum(info.file_size for info in archive.infolist()) > 256 * 1024 * 1024:
+        if any(info.file_size > 32 * 1024 * 1024 for info in archive.infolist()) or sum(info.file_size for info in archive.infolist()) > 256 * 1024 * 1024:
             raise ValueError('備份明文超限，請先封存歷史審計')
     salt = os.urandom(16)
     payload = BACKUP_MAGIC + salt + backup_key(password, salt).encrypt(buffer.getvalue())

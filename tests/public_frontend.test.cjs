@@ -168,3 +168,19 @@ test('啟動先讀固定設定，再讀home；換頁重新讀API且無原始快�
   const page = fs.readFileSync(path.join(root, 'public_frontend/dist/lab.js'), 'utf8');
   assert.doesNotMatch(page, /apiMode|data\/lab\.json|isDemo|publishState/);
 });
+
+test('首次固定設定讀取失敗仍可點 Retry 載入首頁', async t => {
+  const {render, element, context} = await renderers();
+  render.setData(undefined);
+  context.console = {error() {}};
+  let failed = true;
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (url === '/data/site.json') return failed ? response({}, 503) : response(base());
+    return response({assets: [], recentPublications: [], counts: {publications: 0}});
+  });
+  await render.start();
+  assert.match(element('#content').innerHTML, /Retry/);
+  failed = false;
+  await element('#retry').onclick();
+  assert.doesNotMatch(element('#content').innerHTML, /could not be loaded/);
+});

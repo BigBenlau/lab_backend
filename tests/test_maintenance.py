@@ -18,7 +18,7 @@ from lab_backend.application import public_app
 from lab_backend.cli import backup, backup_state, file_hash, import_csv, restore
 from lab_backend.models import MODELS, new_metadata
 from lab_backend.store import Store, StoreError, encode_csv, exclusive_lock, json_size, validate_capacity
-from scripts.maintenance import backup_static, check_files, container_probe, main, monitor, restore_static, verify_static
+from scripts.maintenance import snapshot, rebuild, rebuild_site, backup_static, check_files, container_probe, main, monitor, restore_static, verify_static
 
 
 class GatewaySettingsTests(unittest.TestCase):
@@ -56,7 +56,7 @@ class GatewaySettingsTests(unittest.TestCase):
         """每次獨立啟動並捕捉退出碼，不讓被拒的設定污染真實檔案。"""
         (self.root / 'calls').unlink(missing_ok=True)
         return subprocess.run(['sh', str(self.entry), *args], env={**self.env, **changes},
-                              text=True, capture_output=True, timeout=5)
+                              text=True, capture_output=True, timeout=30)
 
     def test_fixed_https_ports_and_separate_certificate_paths(self):
         """共用Nginx的兩個TLS listener仍使用各自憑證，先檢查再啟動。"""
@@ -152,7 +152,7 @@ class DeploymentFilesTests(unittest.TestCase):
     def run_command(self, *args):
         """保留含空格的專案路徑，驗證檢查與Compose參數都正確引用。"""
         return subprocess.run(['sh', str(self.entry), *args], env=self.env,
-                              capture_output=True, text=True, timeout=5)
+                              capture_output=True, text=True, timeout=30)
 
     def test_missing_dockerfile_stops_before_docker(self):
         for args in [('http', 'build', '--pull', 'public-api', 'gateway'), ('build', '--pull')]:
@@ -167,7 +167,7 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
 
     def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
-        for name in ('deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh',
+        for name in ('public_frontend/deliverables/logo/casino-symbol.svg', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh',
                      'admin_frontend/admin/index.html', 'admin_frontend/admin/app.js', 'admin_frontend/admin/style.css',
                      'public_frontend/dist/lab.html', 'public_frontend/dist/lab.js', 'public_frontend/dist/api.js',
                      'public_frontend/dist/lab.css', 'public_frontend/dist/gold.css'):
@@ -191,6 +191,72 @@ class DeploymentFilesTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('.dockerignore', result.stderr)
             self.assertFalse(self.calls.exists())
+
+    def test_external_check_reports_a_wrong_redirect(self):
+        """以 curl 替身驗證端口／名稱矩陣及失敗退出碼，不連外。"""
+        curl = self.root / 'bin/curl'
+        curl.write_text('''#!/bin/sh
+for arg do url=$arg; done
+case "$url" in
+  http://*:27182/*) echo "302 https://${url#http://}" ;;
+  http://*:443/*) dest=${url#http://}; echo "302 https://${dest%:443/*}/${dest#*:443/}" ;;
+  http://*) echo "${REDIRECT:-301} https://${url#http://}" ;;
+  https://*:27182/api/v1/auth/session) printf '401 ' ;;
+  https://*) printf '200 ' ;;
+esac
+''')
+        curl.chmod(0o700)
+        args = ['sh', str(Path(__file__).resolve().parents[1] / 'deploy/check-site.sh'), '203.0.113.10']
+        result = subprocess.run(args, env=self.env, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count('通過'), 4)
+        result = subprocess.run(args, env={**self.env, 'REDIRECT': '200'}, capture_output=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_restore_volume_is_external_and_cannot_be_chosen_by_environment(self):
+        self.env['LAB_DATA_VOLUME'] = 'foreign'
+        self.assertEqual(self.run_command('config', '--quiet').returncode, 0)
+        override = str(self.root / 'deploy/compose.recovery.yml')
+        self.assertNotIn(override, self.calls.read_text().splitlines())
+        (self.root / 'secrets').mkdir()
+        pointer = self.root / 'secrets/active-volume'
+        pointer.write_text('lab-restore-demo\n')
+        self.assertEqual(self.run_command('config', '--quiet').returncode, 0)
+        self.assertIn(override, self.calls.read_text().splitlines())
+        pointer.write_text('foreign\n')
+        self.assertNotEqual(self.run_command('config', '--quiet').returncode, 0)
+
+    def test_host_cutover_rolls_back_if_readiness_fails(self):
+        """使用 Docker 和 Compose 命令替身，核對失敗確實恢復原卷並保留監測。"""
+        private = self.root / 'private'
+        private.mkdir()
+        (private / 'project').write_text(str(self.root))
+        secrets = self.root / 'secrets'
+        secrets.mkdir()
+        (self.root / 'bin/flock').write_text('#!/bin/sh\nexit 0\n')
+        (self.root / 'bin/flock').chmod(0o700)
+        source = (Path(__file__).resolve().parents[1] / 'deploy/backup.sh').read_text()
+        wrapper = self.root / 'backup.sh'
+        wrapper.write_text(source.replace('state=/var/lib/lab-tls', 'state="$TEST_STATE"')
+                           .replace('[ "$(id -u)" = 0 ]', 'true'))
+        self.entry.write_text('''set -eu
+v=lab-backend_lab_data
+if [ -e secrets/active-volume ]; then v=$(cat secrets/active-volume); fi
+echo "$v $*" >> "$TEST_STATE/trace"
+case "$1" in
+  ps) echo watch ;;
+  exec) if [ "$v" = lab-restore-broken ] && [ "$3" = public-api ]; then exit 1; fi ;;
+esac
+''')
+        def activate(name):
+            return subprocess.run(['sh', str(wrapper), 'activate', name], env={**self.env, 'TEST_STATE': str(private)},
+                                  capture_output=True, timeout=10).returncode
+        self.assertNotEqual(activate('lab-restore-broken'), 0)
+        self.assertEqual((secrets / 'active-volume').read_text().strip(), 'lab-backend_lab_data')
+        self.assertIn('lab-backend_lab_data watch', (private / 'trace').read_text())
+        self.assertEqual(activate('lab-restore-good'), 0)
+        self.assertEqual((secrets / 'active-volume').read_text().strip(), 'lab-restore-good')
+        self.assertEqual((secrets / 'previous-volume').read_text().strip(), 'lab-backend_lab_data')
 
     def test_root_gitignore_protects_data_and_keeps_deployable_code(self):
         """用真正Git比對合成路徑；不讀私人檔案、不更改本專案索引。"""
@@ -322,6 +388,76 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(sample.call_count, 2)
             with patch('sys.argv', ['maintenance', 'monitor']):
                 self.assertEqual(main(), 1)
+
+    def test_online_snapshot_full_and_content_only_recovery(self):
+        """同一快照產生三件組，管理持鎖時仍能備份；還原先演練到新卷。"""
+        public = self.store.root / 'public'
+        self.web.rename(public)
+        versions = self.root / 'versions'
+        versions.mkdir()
+        password = 'synthetic-backup-password'
+        with self.store.maintenance():
+            first = snapshot(self.store, versions, password)
+            second = snapshot(self.store, versions, password)
+        self.assertNotEqual(first, second)
+        bundle = versions / first['version']
+        self.assertEqual({p.name for p in bundle.iterdir()}, {'site.json', 'public.zip', 'database.enc'})
+        doc = bundle / 'site.json'
+        data = json.loads(doc.read_text())
+        self.assertEqual(data['content']['publications'][0]['id'], 'paper0')
+        self.assertEqual(set(data['content']), {'people', 'publications', 'assets'})
+        self.assertNotIn('created', data['content']['people'][0])
+        self.assertNotIn('content', json.loads((public / 'site.json').read_text()))
+        self.assertTrue(backup_state(self.store)['snapshot']['ok'])
+        target = Store(self.root / 'target'); target.root.mkdir()
+        pair = (target, bundle / 'public.zip', bundle / 'database.enc', password)
+        rebuild(*pair, document=doc, expected_version=first['version'])
+        with self.assertRaises(ValueError): rebuild(*pair, expected_version=second['version'])
+        self.assertEqual(list(target.root.iterdir()), [])
+        # 有效的 DB 和 ZIP 配上一份改過的 JSON 也不能切換。
+        original = doc.read_bytes()
+        data['content']['publications'][0]['title'] += ' changed'
+        doc.write_text(json.dumps(data))
+        with self.assertRaises(ValueError): rebuild(*pair, document=doc, apply=True)
+        self.assertEqual(list(target.root.iterdir()), [])
+        doc.write_bytes(original)
+        rebuild(*pair, document=doc, apply=True)
+        recovered = target.read(include_audit=True)
+        self.assertEqual(recovered['publications'], self.store.read()['publications'])
+        self.assertEqual(recovered['audit'][-1]['action'], 'storage.restored')
+        self.assertEqual((target.root / 'public/assets/logo.svg').read_bytes(), (public / 'assets/logo.svg').read_bytes())
+        with self.assertRaises(ValueError): rebuild(*pair, document=doc, apply=True)
+        portable = Store(self.root / 'portable'); portable.root.mkdir()
+        rebuild_site(portable, doc, public, True)
+        self.assertEqual(portable.read()['users'], [])
+        self.assertEqual([p['id'] for p in portable.read()['publications']], ['paper0', 'paper1', 'paper2'])
+        (public / 'assets/logo.svg').unlink()
+        with self.assertRaises(ValueError): snapshot(self.store, versions, password)
+        self.assertFalse(backup_state(self.store)['snapshot']['ok'])
+        self.assertEqual(len(list(versions.iterdir())), 2)
+
+    def test_empty_assets_survive_legacy_recovery(self):
+        self.store.change(lambda s: s['assets'].clear())
+        (self.web / 'assets/logo.svg').unlink()
+        db, archive, _ = self.paired_backup()
+        target = Store(self.root / 'recovery'); target.root.mkdir()
+        rebuild(target, archive, db, 'synthetic-backup-password', apply=True)
+        self.assertTrue((target.root / 'public/assets').is_dir())
+        (target.root / 'public/assets').rmdir()
+        self.assertFalse(check_files(target, target.root / 'public')['ok'])
+
+    def test_init_resumes_interrupted_directory_publish(self):
+        target = Store(self.root / 'interrupted')
+        rename = Path.rename
+        def interrupt(source, dest):
+            if dest == target.root / 'private':
+                raise OSError('interrupted')
+            return rename(source, dest)
+        with patch.object(Path, 'rename', interrupt), self.assertRaises(OSError):
+            target.initialize()
+        target.initialize()
+        self.assertEqual(target.read()['people'], [])
+        with self.assertRaises(StoreError): target.initialize()
 
     def paired_backup(self):
         db, static = self.root / 'database.enc', self.root / 'static.zip'

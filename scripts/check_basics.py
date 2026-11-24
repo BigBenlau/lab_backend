@@ -230,7 +230,11 @@ assert set(http_gateway) == {'environment', 'ports', 'volumes'}
 assert http_gateway['environment'] == {'LAB_HTTP_TEST': 'true'}
 assert isinstance(http_gateway['ports'], ReplaceList) and http_gateway['ports'] == ['0.0.0.0:80:8080', '0.0.0.0:27181:27181']
 assert isinstance(http_gateway['volumes'], ReplaceList) and http_gateway['volumes'] == [web['volumes'][0]]
-assert '${' not in (ROOT / 'deploy/compose.yml').read_text() + (ROOT / 'deploy/compose.http.yml').read_text()
+compose_text = (ROOT / 'deploy/compose.yml').read_text() + (ROOT / 'deploy/compose.http.yml').read_text()
+assert '${' not in compose_text
+recovery_volume = (ROOT / 'deploy/compose.recovery.yml').read_text()
+assert 'lab_data: !override' in recovery_volume and 'external: true' in recovery_volume
+assert 'name: ${LAB_DATA_VOLUME:?' in recovery_volume
 assert not (ROOT / '.env.example').exists()
 assert 'ADMIN_HTTP_PORT' not in (ROOT / 'deploy/compose.yml').read_text()
 for config in (common,):
@@ -240,8 +244,8 @@ for config in (common,):
 # 單一白名單只允許明確程式檔；開放目錄後立即重新排除其內容，防止連帶放行資料。
 build_ignore = [line for line in (ROOT / '.dockerignore').read_text().splitlines() if line and not line.startswith('#')]
 build_dirs = {'lab_backend', 'scripts', 'admin_frontend', 'admin_frontend/admin', 'deploy',
-              'public_frontend', 'public_frontend/dist'}
-build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf',
+              'public_frontend', 'public_frontend/dist', 'public_frontend/deliverables', 'public_frontend/deliverables/logo'}
+build_files = {'public_frontend/deliverables/logo/casino-symbol.svg', 'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf',
                'deploy/Dockerfile', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh'}
 build_files.update(str(path.relative_to(ROOT)) for path in (ROOT / 'lab_backend').glob('*.py'))
 build_files.update('admin_frontend/admin/' + name for name in ('index.html', 'app.js', 'style.css'))
@@ -263,7 +267,7 @@ for directory in ('public_frontend', 'deploy', 'admin_frontend', 'lab_backend', 
 gateway_docker = (ROOT / 'deploy/Dockerfile.gateway').read_text()
 # 合併映像只複製兩個前端程式及入口設定，仍不能帶入Python、初始化來源或憑證。
 gateway_sources = {source for line in gateway_docker.splitlines() if line.startswith('COPY ') for source in line.split()[1:-1]}
-assert gateway_sources == {'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh'} | {
+assert gateway_sources == {'public_frontend/deliverables/logo/casino-symbol.svg', 'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh'} | {
     'public_frontend/dist/' + name for name in ('lab.html', 'lab.js', 'api.js', 'lab.css', 'gold.css')}
 for old_file in ('Dockerfile', 'nginx.conf', 'nginx-http.conf', 'nginx-https.conf'):
     assert not (ROOT / 'public_frontend' / old_file).exists(), '舊版部署入口不再維護'

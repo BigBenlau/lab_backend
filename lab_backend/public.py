@@ -1,6 +1,6 @@
 """四個頁面查詢入口；每次唯讀 SQLite，不提供整站輸出或單篇論文 API。"""
 from fastapi import APIRouter, Request, HTTPException
-from .models import ApiError, Home, Id, PersonDetail, PersonSummary, PublicPerson, PublicPublication, PublicationSummary, publication_index
+from .models import ApiError, Home, Id, PersonDetail, PersonSummary, PublicPerson, PublicPublication, PublicationSummary, public_row
 
 
 router = APIRouter(prefix='/api/v1/public', tags=['public'], responses={
@@ -17,10 +17,15 @@ def page_fields(model, row):
             description='同一快照回傳全部 group_photo 合照、入庫倒序前三篇論文摘要及論文總數。固定網站文字由前端維護。')
 def home(request: Request):
     """首頁只輸出需要的摘要，不把所有成員及所有論文送給前端。"""
-    state = request.app.state.store.read(('assets', 'publications'))
-    recent = [page_fields(PublicationSummary, row) for row in state['publications'][:3]]
-    return {'assets': [row for row in state['assets'] if row['metadata'].get('purpose', 'other') == 'group_photo'],
-            'recentPublications': recent, 'counts': {'publications': len(state['publications'])}}
+    store = request.app.state.store
+    with store.connection() as conn:
+        assets = store.read_rows(conn, 'assets', suffix='ORDER BY rowid')
+        recent = store.read_rows(conn, 'publications', suffix='ORDER BY rowid DESC LIMIT 3')
+        count = conn.execute(f"SELECT COUNT(*) FROM {store.table('publications')}").fetchone()[0]
+    return {'assets': [public_row('assets', a) for a in assets if a['metadata'].get('purpose') == 'group_photo'],
+            'recentPublications': [page_fields(PublicationSummary, p) for p in recent],
+            'counts': {'publications': count}}
+
 
 
 @router.get('/people', response_model=list[PersonSummary], summary='取得全部成員簡介',
@@ -40,9 +45,8 @@ def person_detail(person_id: Id, request: Request):
     person = next((p for p in state['people'] if p['id'] == person_id), None)
     if person is None:
         raise HTTPException(404, '找不到成員')
-    # 索引共用唯一作者規則；公開列表已倒序，先還原為索引函式接收的入庫順序。
-    related = set(publication_index(state['publications'][::-1]).get(person_id, []))
-    papers = [page_fields(PublicPublication, p) for p in state['publications'] if p['id'] in related]
+    papers = [page_fields(PublicPublication, p) for p in state['publications']
+              if any(author['personId'] == person_id for author in p['authors'])]
     return {'person': page_fields(PublicPerson, person), 'publications': papers}
 
 

@@ -65,6 +65,7 @@ function harness({ hash = '', session = false, override = () => undefined } = {}
     throw new Error(`Unexpected API: ${url}`);
   };
   const context = vm.createContext({
+    crypto: require('node:crypto').webcrypto,
     document: { querySelector: (selector) => nodes[selector.slice(1)], createElement: (tag) => new Element(tag), createDocumentFragment: () => new Element('fragment') },
     location, history: { pushState: (_, __, hash) => { location.hash = hash; }, replaceState: (_, __, hash) => { location.hash = hash; } },
     window: { addEventListener: (name, fn) => { events[name] = fn; } },
@@ -214,22 +215,22 @@ test('內容頁完成新增、帶版本更新與刪除，衝突保留輸入', as
     if (url === '/api/v1/admin/content/people' && options.method === 'POST') {
       row = { data: JSON.parse(options.body).data, version: 1 }; return reply(row, 201);
     }
-    if (url === '/api/v1/admin/content/people/p1' && options.method === 'PUT') {
+    if (url === `/api/v1/admin/content/people/${row?.data.id}` && options.method === 'PUT') {
       if (conflict) return reply({ detail: '版本衝突' }, 409);
       row = { data: JSON.parse(options.body).data, version: 2 }; return reply(row);
     }
-    if (url === '/api/v1/admin/content/people/p1?version=2' && options.method === 'DELETE') { row = null; return reply({ ok: true }); }
+    if (url === `/api/v1/admin/content/people/${row?.data.id}?version=2` && options.method === 'DELETE') { row = null; return reply({ ok: true }); }
   } });
   await settle(); await app.context.navigate('people');
   await findButton(app.nodes.workspace, '新增').emit('click');
   let form = app.nodes.workspace.querySelector('form');
-  const inputs = form.querySelectorAll('input'); inputs[0].value = 'p1'; inputs[1].value = 'New Person';
+  const inputs = form.querySelectorAll('input'); assert.equal(inputs.length, 1); inputs[0].value = 'New Person';
   await form.emit('submit');
   form = app.nodes.workspace.querySelector('form');
-  form.querySelectorAll('input')[1].value = 'Changed';
+  form.querySelectorAll('input')[0].value = 'Changed';
   await form.emit('submit');
   assert.match(form.textContent, /版本衝突/);
-  assert.equal(form.querySelectorAll('input')[1].value, 'Changed');
+  assert.equal(form.querySelectorAll('input')[0].value, 'Changed');
   conflict = false; await form.emit('submit');
   await findButton(app.nodes.workspace, '返回列表').emit('click');
   await findButton(app.nodes.workspace, '刪除').emit('click');
@@ -276,7 +277,8 @@ test('成員表單展示反向論文，送出僅含可寫欄位，照片可設�
   }});
   await settle(); await app.context.navigate('people');
   await app.nodes.workspace.querySelectorAll('button').find(b => b.textContent === '開啟').emit('click');
-  assert.match(app.nodes.workspace.textContent, /Linked Paper — paper-1/);
+  assert.match(app.nodes.workspace.textContent, /Linked Paper/);
+  assert.doesNotMatch(app.nodes.workspace.textContent, /paper-1/);
   assert.match(app.nodes.workspace.textContent, /familyName/);
   assert.match(app.nodes.workspace.textContent, /英文名（可留空）/);
   for (const removed of ['slug', 'affiliation', 'sourceUrl']) assert.equal(Object.hasOwn(schema.properties, removed), false);
@@ -400,13 +402,13 @@ test('儲存等待期間鎖定整份內容表單，失敗解鎖且保留輸入',
   await findButton(app.nodes.workspace, '新增').emit('click');
   const form = app.nodes.workspace.querySelector('form'), group = form.querySelector('fieldset');
   form.querySelectorAll('input')[0].value = 'new-person';
-  form.querySelectorAll('input')[1].value = 'Unsaved name';
+  form.querySelectorAll('input')[0].value = 'Unsaved name';
   await form.emit('input');
   const submitted = form.emit('submit'); await settle();
   assert.equal(group.disabled, true); assert.equal(app.state().dirty, true);
   pending.resolve(reply({detail: 'Too large'}, 422)); await submitted;
   assert.equal(group.disabled, false);
-  assert.equal(form.querySelectorAll('input')[1].value, 'Unsaved name');
+  assert.equal(form.querySelectorAll('input')[0].value, 'Unsaved name');
   assert.equal(app.state().dirty, true);
   assert.match(form.textContent, /Too large/);
 });

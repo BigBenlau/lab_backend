@@ -24,6 +24,8 @@ secrets/
 
 # 真實初始化來源只由seed唯讀掛載，須另行傳送到VPS。
 lab.json
+site.json
+backup-password
 /public_frontend/dist/data/
 /public_frontend/dist/assets/
 # 設計與瀏覽器截圖可能包含成員資料，只在本機保存。

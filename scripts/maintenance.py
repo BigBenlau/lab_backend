@@ -1,6 +1,7 @@
 """容器內的檔案檢查、靜態備份及監測；資料匯入統一使用lab_backend.cli。"""
 from pathlib import Path, PurePosixPath
 from datetime import datetime, timezone
+from contextlib import contextmanager
 import argparse
 import hashlib
 import json
@@ -9,6 +10,7 @@ import shutil
 import stat
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,15 +18,17 @@ import uuid
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lab_backend.cli import atomic_json, backup_job, backup_state, content_hash, file_hash
+from lab_backend.cli import atomic_json, backup_job, backup_state, content_hash, file_hash, read_backup, write_database_backup
 from lab_backend.config import Config
 from pydantic import Field
-from lab_backend.models import Id, Link, Model, Short, now
-from lab_backend.store import Store, exclusive_lock, json_loads, read_file, sync_dir, write_new
+from lab_backend.models import Id, Link, Model, MODELS, Short, data_only, empty_state, new_metadata, now, validate_state
+from lab_backend.store import Store, exclusive_lock, json_loads, read_file, sync_dir, validate_capacity, write_new
 
 MAX_STATIC_FILE = 256 * 1024 * 1024
 MAX_STATIC_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_STATIC_FILES = 10000
+# 月份最長 31 天，額外預留 1 天供排程完成。
+DEFAULT_MAX_BACKUP_HOURS = 32 * 24
 MAX_SITE_FILE = 1024 * 1024
 STATIC_SUFFIXES = {'.svg', '.png', '.jpg', '.jpeg', '.webp', '.pdf'}
 
@@ -91,7 +95,7 @@ def check_site(root, site, rows):
     if len(ids) != len(site['assets']) or any(site['siteSettings'][key] not in ids | {None}
                                            for key in ('logoAssetId', 'wordmarkAssetId')):
         raise ValueError('固定品牌圖關聯無效')
-    links = [a['url'] for a in site['assets']] + content_links(rows)
+    links = site_links(site) + content_links(rows)
     for value in links:
         relative = local_asset(value)
         if relative is not None:
@@ -100,11 +104,31 @@ def check_site(root, site, rows):
             checked_file(root, relative)
 
 
+def site_links(site):
+    """固定品牌和頁面連結中的本地圖片／文件也須隨版本保留。"""
+    settings = site['siteSettings']
+    urls = [settings.get(key) for key in ('publicationArchiveUrl', 'recruitmentUrl')]
+    urls.extend(link['url'] for link in settings.get('links', []))
+    for item in site['opportunities']:
+        urls.extend((item['applicationUrl'], item['guidanceUrl']))
+    return [a['url'] for a in site['assets']] + [u for u in urls if is_asset_link(u)]
+
+
+def is_asset_link(url):
+    """一般網頁連結可指向網站路由；只有同站 assets 路徑需要備份實體檔。"""
+    if not url:
+        return False
+    parsed = urllib.parse.urlsplit(urllib.parse.unquote(url))
+    return not (parsed.scheme or parsed.netloc) and parsed.path.removeprefix('./').lstrip('/').startswith('assets/')
+
+
 def content_links(state):
     """SQLite、首次轉換及缺檔檢查共用三類內容的檔案引用規則。"""
     return ([a['url'] for a in state['assets']]
             + [p['portrait']['url'] for p in state['people'] if p['portrait']]
-            + [p['pdfPath'] for p in state['publications'] if p['pdfPath']])
+            + [p['pdfPath'] for p in state['publications'] if p['pdfPath']]
+            + [link['url'] for p in state['people'] for link in p['links'] if is_asset_link(link['url'])]
+            + [p['sourceUrl'] for p in state['publications'] if is_asset_link(p['sourceUrl'])])
 
 
 def copy_public(root, target, files):
@@ -194,12 +218,18 @@ def checked_file(root, relative):
 def check_files(store, web_root):
     """離線查SQLite中的本地圖片／PDF；外部URL只列為未驗證，不發送請求。"""
     root = web_root.resolve(strict=True)
-    state = store.read()
+    return file_report(root, store.read())
+
+
+def file_report(root, state):
+    """與備份共用同一份已讀取的資料，避免第二次讀庫混入新內容。"""
     links = content_links(state)
     missing, external, checked = [], 0, 0
+    if not (root / 'assets').is_dir() or (root / 'assets').is_symlink():
+        missing.append('assets/')
     if (root / 'site.json').exists() or (root / 'site.json').is_symlink():
         site = load_site(root)
-        links += [a['url'] for a in site['assets']]
+        links += site_links(site)
         ids = {a['id'] for a in site['assets']}
         if any(site['siteSettings'][key] not in ids | {None} for key in ('logoAssetId', 'wordmarkAssetId')):
             raise ValueError('固定品牌圖關聯無效')
@@ -225,7 +255,9 @@ def static_files(web_root, *, include_site=True):
     if folder.is_symlink() or not folder.is_dir():
         raise ValueError('缺少普通assets目錄')
     files, total = [], 0
-    for current, directories, names in os.walk(folder, followlinks=False):
+    def walk_error(error):
+        raise error
+    for current, directories, names in os.walk(folder, followlinks=False, onerror=walk_error):
         for name in directories + names:
             if (Path(current) / name).is_symlink():
                 raise ValueError('assets內不接受符號連結')
@@ -260,37 +292,56 @@ def backup_static(store, web_root, output, version, database_backup):
         snapshot = store.read()
         if content_hash(snapshot) != db.get('contentHash'):
             raise ValueError('內容已改變，請重新備份資料庫再備份靜態檔')
-        report = check_files(store, web_root)
-        if not report['ok']:
-            raise ValueError('存在缺失的本地資產，請先執行check-files')
-        manifest = {'format': 1, 'version': version, 'createdAt': now(), 'databaseSha256': db['sha256'],
-                    'contentHash': db['contentHash'], 'externalUnchecked': report['externalUnchecked'], 'files': []}
-        pending = output.with_name('.' + output.name + '.' + uuid.uuid4().hex)
-        try:
-            fd = os.open(pending, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, 'w+b') as handle:
-                total = 0
-                with zipfile.ZipFile(handle, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-                    for path, relative in static_files(web_root):
-                        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-                        with os.fdopen(descriptor, 'rb') as source, archive.open(relative, 'w', force_zip64=True) as target:
-                            before = os.fstat(source.fileno())
-                            info = copy_and_hash(source, target, limit=min(MAX_STATIC_FILE, MAX_STATIC_TOTAL - total))
-                            total += info['size']
-                            after = os.fstat(source.fileno())
-                            if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
-                                raise ValueError('靜態檔正在更新，請暫停修改後重試')
-                        manifest['files'].append({'path': relative, **info})
-                    encoded = json.dumps(manifest, ensure_ascii=False).encode()
-                    if len(encoded) > 4 * 1024 * 1024:
-                        raise ValueError('manifest過大')
-                    archive.writestr('manifest.json', encoded)
-                handle.flush(); os.fsync(handle.fileno())
-            # link的目的地必須不存在；不覆寫既有備份。
-            os.link(pending, output); sync_dir(output.parent)
-            result.update(sha256=file_hash(output), databaseSha256=db['sha256'], contentHash=db['contentHash'])
-        finally:
-            pending.unlink(missing_ok=True)
+        manifest = write_static(web_root, output, version, db, snapshot)
+        result.update(sha256=file_hash(output), databaseSha256=db['sha256'], contentHash=db['contentHash'])
+    return manifest
+
+
+def static_inventory(root):
+    """在資料庫快照前後比對整份清單；捕捉新增、刪除、換檔及原地修改。"""
+    files = static_files(root)
+    versions = []
+    for path, name in files:
+        info = path.stat()
+        versions.append((name, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+    return files, versions
+
+
+def write_static(web_root, output, version, db, snapshot, inventory=None):
+    """檔案來源與資料庫屬同一版本。複製期間逐檔檢查，結束時再核對整個清單。"""
+    report = file_report(web_root, snapshot)
+    if not report['ok']:
+        raise ValueError('存在缺失的本地資產，請先執行check-files')
+    manifest = {'format': 1, 'version': version, 'createdAt': now(), 'databaseSha256': db['sha256'],
+                'contentHash': db['contentHash'], 'externalUnchecked': report['externalUnchecked'], 'files': []}
+    files, before_copy = inventory or static_inventory(web_root)
+    pending = output.with_name('.' + output.name + '.' + uuid.uuid4().hex)
+    try:
+        fd = os.open(pending, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w+b') as handle:
+            total = 0
+            with zipfile.ZipFile(handle, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                for path, relative in files:
+                    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(descriptor, 'rb') as source, archive.open(relative, 'w', force_zip64=True) as target:
+                        before = os.fstat(source.fileno())
+                        info = copy_and_hash(source, target, limit=min(MAX_STATIC_FILE, MAX_STATIC_TOTAL - total))
+                        total += info['size']
+                        after = os.fstat(source.fileno())
+                        if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                            raise ValueError('靜態檔正在更新，請暫停修改後重試')
+                    manifest['files'].append({'path': relative, **info})
+                encoded = json.dumps(manifest, ensure_ascii=False).encode()
+                if len(encoded) > 4 * 1024 * 1024:
+                    raise ValueError('manifest過大')
+                archive.writestr('manifest.json', encoded)
+            handle.flush(); os.fsync(handle.fileno())
+        # link的目的地必須不存在；不覆寫既有備份。
+        if static_inventory(web_root)[1] != before_copy:
+            raise ValueError('靜態目錄在備份期間改變')
+        os.link(pending, output); sync_dir(output.parent)
+    finally:
+        pending.unlink(missing_ok=True)
     return manifest
 
 
@@ -337,6 +388,7 @@ def restore_static(archive_path, database_backup, target, apply=False):
     if apply:
         target.mkdir(mode=0o700, parents=False, exist_ok=False)
         try:
+            (target / 'assets').mkdir(mode=0o700)
             with zipfile.ZipFile(archive_path) as archive:
                 for item in manifest['files']:
                     path = target / item['path']; path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +409,124 @@ def restore_static(archive_path, database_backup, target, apply=False):
     return {'version': manifest['version'], 'files': len(manifest['files']), 'applied': apply}
 
 
+def snapshot_json(version, site, state):
+    """固定設定與三類內容可攜出；私有帳戶、審計和編輯版本只進加密備份。"""
+    return {'format': 'lab-site-1', 'version': version, 'site': site,
+            'content': {key: [data_only(key, row) for row in state[key]] for key in MODELS}}
+
+
+def snapshot(store, versions, password):
+    """線上快照只在讀 SQLite 時持讀交易。完整版本以同一檔案系統的 rename 發布。"""
+    from lab_backend.auth import strong_password
+    version = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:12]
+    with backup_job(store, 'snapshot', version) as job:
+        strong_password(password)
+        if versions.is_symlink() or versions.resolve().is_relative_to(store.root.resolve()):
+            raise ValueError('請使用資料卷外的私人備份目錄')
+        with tempfile.TemporaryDirectory(dir=versions, prefix='.writing-') as temp:
+            pending = Path(temp) / version
+            pending.mkdir(mode=0o700)
+            inventory = static_inventory(store.root / 'public')
+            state = store.read(include_audit=True)
+            db = write_database_backup(state, pending / 'database.enc', password)
+            archive = pending / 'public.zip'
+            write_static(store.root / 'public', archive, version, db, state, inventory)
+            # 以封存檔內實際複製的固定設定生成快照，避免再次讀線上目錄。
+            with zipfile.ZipFile(archive) as files:
+                site = Site.model_validate(json_loads(files.read('site.json').decode())).model_dump()
+            write_new(pending / 'site.json', json.dumps(snapshot_json(version, site, state), ensure_ascii=False).encode())
+            job.update(database=db, static={'sha256': file_hash(archive), 'databaseSha256': db['sha256'],
+                                            'contentHash': db['contentHash']})
+            sync_dir(pending)
+            pending.rename(versions / version)
+            sync_dir(versions)
+    return {'version': version, 'ok': True}
+
+
+def rebuild(store, archive, database, password, *, document=None, expected_version=None, apply=False):
+    """新卷內排演整套恢復；驗證舊配對或新版三件組後才准許部署者切卷。"""
+    encrypted_hash = file_hash(database)
+    state = read_backup(database, password)
+    with empty_target(store) as staging:
+        web = staging / 'public'
+        result = restore_static(archive, database, web, apply=True)
+        if expected_version is not None and result['version'] != expected_version:
+            raise ValueError('版本目錄名稱與備份內容不一致')
+        manifest = json_loads(read_file(web / 'manifest.json'))
+        if manifest['databaseSha256'] != encrypted_hash or manifest['contentHash'] != content_hash(state):
+            raise ValueError('靜態檔與資料快照不符')
+        (web / 'manifest.json').unlink()
+        site = load_site(web)
+        if document is not None:
+            expected = snapshot_json(result['version'], site, state)
+            if read_site_snapshot(document) != expected:
+                raise ValueError('site.json 與配對備份不符')
+        check_site(web, site, state)
+        for user in state['users']:
+            user['version'] += 1
+            user['authVersion'] += 1
+        from lab_backend.auth import audit
+        audit(state, 'cli:rebuild', 'storage.restored')
+        finish_rebuild(store, staging, state, apply)
+    return {'version': result['version'], 'applied': apply}
+
+
+def read_site_snapshot(path):
+    """各內容表有獨立容量限制；整站 JSON 比單表交換檔大。"""
+    checked_file(path.parent, path.name)
+    with path.open('rb') as handle:
+        limit = 100 * 1024 * 1024
+        raw = handle.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError('整站備份超限')
+    return json_loads(raw.decode())
+
+
+def rebuild_site(store, document, assets_root, apply=False):
+    """只剩內容 JSON 與原圖／PDF 時重建業務資料，管理員須由維運者重新建立。"""
+    data = read_site_snapshot(document)
+    if (set(data) != {'format', 'version', 'site', 'content'} or data['format'] != 'lab-site-1'
+            or not isinstance(data['version'], str) or set(data['content']) != set(MODELS)):
+        raise ValueError('整站備份格式不符')
+    state = empty_state()
+    for key, model in MODELS.items():
+        state[key] = [{**model.model_validate(row).model_dump(), **new_metadata('cli:rebuild')}
+                      for row in data['content'][key]]
+    validate_state(state)
+    validate_capacity(state)
+    site = Site.model_validate(data['site']).model_dump()
+    check_site(assets_root, site, state)
+    with empty_target(store) as staging:
+        web = staging / 'public'
+        copy_public(assets_root, web, static_files(assets_root, include_site=False))
+        write_new(web / 'site.json', json.dumps(site, ensure_ascii=False).encode())
+        check_site(web, site, state)
+        finish_rebuild(store, staging, state, apply)
+    return {'applied': apply, 'needsAdmin': True}
+
+
+@contextmanager
+def empty_target(store):
+    """即使只做演練也在新空卷內工作，以便容納大型靜態檔並保護線上卷。"""
+    with exclusive_lock(store.root):
+        if any(store.root.iterdir()):
+            raise ValueError('恢復目標必須是新空卷')
+        with tempfile.TemporaryDirectory(dir=store.root, prefix='.restoring-') as tmp:
+            yield Path(tmp)
+
+
+def finish_rebuild(store, staging, state, apply):
+    """驗證還原後的實際 SQLite 和檔案。中斷時只影響尚未啟用的新卷。"""
+    rebuilt = Store(staging / 'db')
+    rebuilt.initialize(state)
+    if not check_files(rebuilt, staging / 'public')['ok']:
+        raise ValueError('重建後檔案不齊')
+    if apply:
+        for path in (rebuilt.content_path.parent, rebuilt.admin_path.parent, staging / 'public'):
+            path.rename(store.root / path.name)
+        sync_dir(store.root)
+
+
 def container_probe(service, endpoint):
     """維護容器直連固定內網端點；不用主機 Python、Docker CLI 或 socket。"""
     if service not in ('public-api', 'admin-api') or endpoint not in ('healthz', 'readyz'):
@@ -375,7 +545,7 @@ def container_probe(service, endpoint):
         return 0
 
 
-def monitor(store, probe, min_free=256*1024*1024, max_backup_hours=48, threshold=3):
+def monitor(store, probe, min_free=256*1024*1024, max_backup_hours=DEFAULT_MAX_BACKUP_HOURS, threshold=3):
     """一次採樣；連續不可用計數跨程序保存，告警寫JSON/stderr並由CLI退出碼通知排程。"""
     private = store.admin_path.parent
     with exclusive_lock(private / 'monitor.lock', create=True):
@@ -401,6 +571,8 @@ def monitor(store, probe, min_free=256*1024*1024, max_backup_hours=48, threshold
         if free < min_free: alerts.append({'code': 'LOW_DISK', 'freeBytes': free})
         try:
             jobs = backup_state(store)
+            if jobs.get('snapshot', {}).get('ok') is False:
+                alerts.append({'code': 'BACKUP_FAILED_OR_MISSING', 'kind': 'snapshot'})
             for kind in ('database', 'static'):
                 item = jobs.get(kind, {})
                 if not item.get('ok'): alerts.append({'code': 'BACKUP_FAILED_OR_MISSING', 'kind': kind})
@@ -436,15 +608,36 @@ def main():
     restore = sub.add_parser('restore-static')
     restore.add_argument('archive', type=Path); restore.add_argument('--database-backup', required=True, type=Path)
     restore.add_argument('--target', required=True, type=Path); restore.add_argument('--apply', action='store_true')
+    snap = sub.add_parser('snapshot')
+    snap.add_argument('versions', type=Path)
+    rebuild_cmd = sub.add_parser('rebuild')
+    rebuild_cmd.add_argument('archive', type=Path); rebuild_cmd.add_argument('database', type=Path)
+    rebuild_cmd.add_argument('--expected-version', help='驗證選取的版本目錄名稱')
+    rebuild_cmd.add_argument('--site', type=Path); rebuild_cmd.add_argument('--apply', action='store_true')
+    portable = sub.add_parser('rebuild-site')
+    portable.add_argument('document', type=Path); portable.add_argument('assets_root', type=Path)
+    portable.add_argument('--apply', action='store_true')
     mon = sub.add_parser('monitor')
-    mon.add_argument('--min-free-mib', type=int, default=256); mon.add_argument('--max-backup-hours', type=int, default=48)
+    mon.add_argument('--min-free-mib', type=int, default=256)
+    mon.add_argument('--max-backup-hours', type=int, default=DEFAULT_MAX_BACKUP_HOURS,
+                     help='距上次成功備份的逾期門檻（小時），預設 %(default)s')
     mon.add_argument('--threshold', type=int, default=3)
     mon.add_argument('--interval', type=int, default=0, help='0只檢查一次；正數為容器內重複檢查的間隔秒數')
     args = parser.parse_args()
     config = Config.load()
     store = Store(config.storage)
     try:
-        if args.command == 'install-public': result = install_public(store, args.source, args.apply)
+        if args.command in ('snapshot', 'rebuild'):
+            # 排程由 root 將私密檔導向 stdin；密碼不經 argv、環境或日誌。
+            import getpass
+            password = getpass.getpass('備份密碼: ') if sys.stdin.isatty() else sys.stdin.readline(512).rstrip('\r\n')
+            if args.command == 'snapshot':
+                result = snapshot(store, args.versions, password)
+            else:
+                result = rebuild(store, args.archive, args.database, password, document=args.site,
+                                 expected_version=args.expected_version, apply=args.apply)
+        elif args.command == 'rebuild-site': result = rebuild_site(store, args.document, args.assets_root, args.apply)
+        elif args.command == 'install-public': result = install_public(store, args.source, args.apply)
         elif args.command == 'check-files': result = check_files(store, args.web_root)
         elif args.command == 'backup-static':
             manifest = backup_static(store, args.web_root, args.output, args.version, args.database_backup)

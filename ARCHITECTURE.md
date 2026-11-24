@@ -47,7 +47,7 @@ SQLite是業務內容唯一執行來源，每次API請求開新快照，只讀�
 - seed診斷只輸出例外類型、固定錯誤代碼及白名單提示；JSON語法錯誤可附行／欄數，不輸出原始例外、姓名、ID、來源中的實際檔名／路徑或Pydantic輸入。未知錯誤維持泛化；診斷改善不放寬來源驗證、檔案型別或既有輸出不得覆寫的規則。
 - 靜態引用檔以lstat檢查型別及符號連結，讓權限錯誤保留為permission_denied；避免Python3.14的is_file回傳False而將目錄不可進入誤認為缺檔。seed掛載的dist本身及其子目錄須讓UID10001可進入，檔案可讀；不自動更改主機權限。
 - 全部內容儲存即公開，無草稿／發布／封存。固定品牌、介紹及聯絡頁文字由後端維護工具管理public/site.json，公開官網只讀展示；不放people/publications、不作業務內容回退。沒有研究方向、招募、新聞、網站設定API或相關資料表，也沒有UMPASS、瀏覽器上傳或媒體worker。
-- 畢業年月存people.alumniSince，為YYYY-MM或null；僅有至少一項身份且所有isCurrent=false的校友可填，其他必須null。管理API、CSV、恢復及讀取共用模型驗證；不補造日期、自動切換身份或靜默清除日期。成員列表與個人詳情均回傳此欄位。尚未正式部署，SQLite10只初始化新庫，不提供舊庫升級工具。
+- 畢業年月存people.alumniSince，為YYYY-MM或null；僅有至少一項身份且所有isCurrent=false的校友可填，其他必須null。管理API、CSV、恢復及讀取共用模型驗證；不補造日期、自動切換身份或靜默清除日期。成員列表與個人詳情均回傳此欄位。已部署的 SQLite10 沿用既有卷，初始化只用於新庫。
 - 姓名分姓／名，照片存people.portrait。唯一可寫關聯是authors[].personId；publicationIds在同一快照反查，不雙向重複保存或依同名配對。公開不輸出created/updated或其時間，不暴露操作者。
 - englishName為可留空的英文名；公開個人頁直接回相關publications，publicationIds只留在管理回應。首頁只回metadata.purpose=group_photo的全部合照、前三篇摘要及論文總數；已移除people.slug/sourceUrl/affiliation及publications.slug；管理歷史與版本仍保留。
 - 論文內部按rowid升序讀取，API／管理列表／反查倒序，首頁取前三篇。UPSERT保留位置，CSV依列序新增，備份／恢復保持內部順序；不得自行VACUUM、重排或重建表。
@@ -102,9 +102,11 @@ public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或
 
 `deploy/tls.sh` 使用 Docker lego 的 `shortlived` profile 申請四項識別，IPv4 取自 `/var/lib/lab-tls/ip`。`issue` 處理首次簽發，`renew` 處理線上換證及續期，兩個動作共用同一套設定。SAS 上的 root cron 每 6 小時執行一次 `renew`，剩餘約 72 小時時續簽。上線後，443 只將專用的 `acme-tls/1` 握手分流到 edge 網路的臨時 lego，正常流量由 gateway 官網 TLS listener 處理。管理入口直接處理 TLS。首次上線前才由 lego 綁定 443。工具持鎖核對四項 SAN、信任鏈及配對私鑰，再更新兩處 PEM、平滑重載並檢查八組握手的指紋。安裝失敗時用上一套 PEM 復原。[部署及切換步驟](docs/OPERATIONS.md#site-cutover)
 
+每月快照先記錄靜態檔清單，再在一個 SQLite 交易讀取內容、帳戶和審計。整組備份保存到資料卷外的私人版本目錄，包括可攜出的整站 site.json、完整 database.enc 與 public.zip。只有公開固定設定會由 gateway 提供。恢復先在新卷重建並檢查，部署者明確切換後才重建三個容器；原卷保留供退回。
+
 DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 
-/healthz只看程序，/readyz讀內容，皆不經外部代理。tools從固定內網端點監測磁碟、備份失敗／過期／錯配及持續不可用，不依賴公開Host或外部HTTP代理。watch每60秒採樣，無主機排程；同volume備份仍須匯出異地。外部通知、自動備份、TLS自動化及整機停止監測另行配置。操作步驟集中OPERATIONS，狀態只記已執行的檢查。
+/healthz只看程序，/readyz讀內容，皆不經外部代理。tools從固定內網端點監測磁碟、備份失敗／過期／錯配及持續不可用，不依賴公開Host或外部HTTP代理。watch每60秒採樣，無主機排程；同volume備份仍須匯出異地。線上備份和 TLS 續期各用一條 root cron，外部通知與異地傳輸另行配置。操作步驟集中OPERATIONS，狀態只記已執行的檢查。
 
 ## 交付邊界
 

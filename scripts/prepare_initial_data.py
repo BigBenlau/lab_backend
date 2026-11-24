@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lab_backend.models import FILES, MODELS, empty_state, new_metadata, validate_state
 from lab_backend.store import encode_csv, json_loads, read_file, sync_dir, validate_capacity, write_new
 from scripts.maintenance import (Site, SiteSettings, Opportunity, checked_file, check_site,
-                                 copy_public, static_files, MAX_STATIC_FILES, MAX_STATIC_TOTAL)
+                                 content_links, copy_public, local_asset, site_links, static_files, MAX_STATIC_FILES, MAX_STATIC_TOTAL)
 
 
 # 只允許程式內固定訊息映射成提示；不能直接輸出例外字串，當中可能含姓名、ID或JSON。
@@ -158,7 +158,7 @@ def convert(snapshot):
     return rows, site
 
 
-def prepare(source, output, apply=False):
+def prepare(source, output, apply=False, include_assets=()):
     """預覽先驗型別、關聯、容量及缺檔；套用只建立新 bundle，失敗不留半份。"""
     if output.exists() or output.is_symlink():
         raise ValueError('輸出已存在')
@@ -175,6 +175,12 @@ def prepare(source, output, apply=False):
     rows, site = convert(json_loads(read_file(source_json)))
     files = static_files(root, include_site=False)
     check_site(root, site, rows)
+    # 只發布頁面實際引用的檔案，額外公開檔須由部署者逐一點名。
+    wanted = {relative for url in site_links(site) + content_links(rows) if (relative := local_asset(url))}
+    wanted.update(include_assets)
+    files = [(path, relative) for path, relative in files if relative in wanted]
+    if len(files) != len(wanted):
+        raise ValueError('額外資產路徑不存在或無效')
     encoded_site = json.dumps(site, ensure_ascii=False).encode()
     if len(files) + 1 > MAX_STATIC_FILES or sum(path.stat().st_size for path, _ in files) + len(encoded_site) > MAX_STATIC_TOTAL:
         raise ValueError('含固定設定的公開檔案總容量超限')
@@ -210,9 +216,10 @@ def main():
     parser.add_argument('--source', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--include-asset', action='append', default=[], help='額外公開的 assets/ 相對路徑，可重複')
     args = parser.parse_args()
     try:
-        print(json.dumps(prepare(args.source, args.output, args.apply)))
+        print(json.dumps(prepare(args.source, args.output, args.apply, args.include_asset)))
         return 0
     except Exception as exc:
         code, hint = failure_details(exc)

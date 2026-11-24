@@ -43,7 +43,7 @@ function showLogin(message = '') {
   $('#admin-shell').hidden = true; $('#login-page').hidden = false;
   $('#workspace').replaceChildren(); $('#navigation').replaceChildren(); $('#identity').textContent = '';
   $('#login-form').reset(); $('#login-error').textContent = message;
-  notice(''); pageURL('login', true); document.title = '管理員登入 · Lab 內容管理';
+  notice(''); pageURL('login', true); document.title = '管理員登入 · CASINO Lab 內容管理';
   $('#login-form').querySelector('[name=login]').focus();
 }
 // 頁面切換或登入身份改變後，舊的非同步結果不得覆蓋目前畫面。
@@ -155,7 +155,7 @@ function field(key, spec, value, root, context = {}) {
     input = element('select');
     if (relations[key]) {
       input.append(element('option', '未指定', { value: '' }));
-      for (const item of state.refs[relations[key]] || []) input.append(element('option', `${item.label} — ${item.id}`, { value: item.id }));
+      for (const item of state.refs[relations[key]] || []) input.append(element('option', item.label, { value: item.id }));
       if (value && ![...input.options].some((o) => o.value === value)) input.append(element('option', `${value}（目前不可讀）`, { value }));
     } else {
       schema.enum.forEach((v) => input.append(element('option', v, { value: v })));
@@ -206,8 +206,8 @@ function field(key, spec, value, root, context = {}) {
 
 // ── 內容管理 ──
 // 組合欄位元件與 read()，儲存時才讀取目前輸入。
-function formFields(schema, data, existing = false) {
-  const fields = Object.entries(schema.properties).map(([key, spec]) => [key, field(key, spec, data[key], schema, { existing })]);
+function formFields(schema, data, existing, autoId) {
+  const fields = Object.entries(schema.properties).filter(([key]) => !autoId || key !== 'id').map(([key, spec]) => [key, field(key, spec, data[key], schema, { existing })]);
   return { nodes: fields.map(([, item]) => item.box), read: () => Object.fromEntries(fields.map(([key, item]) => [key, item.read()]).filter(([, v]) => v !== undefined)) };
 }
 // 新增/編輯完整記錄，帶版本提交；錯誤時保留使用者輸入。
@@ -215,7 +215,7 @@ function editContent(resource, record = null) {
   const view = state.view;
   const schema = state.schemas[resource], data = record?.data || initial(schema, schema);
   const workspace = $('#workspace'); workspace.replaceChildren(element('h2', `${record ? '編輯' : '新增'}：${titles[resource]}`));
-  workspace.append(element('p', '儲存後立即更新公開網站內容；ID 建立後不可修改。'));
+  workspace.append(element('p', '儲存後立即更新公開網站內容。'));
   if (resource === 'people') workspace.append(element('p', '畢業年月僅供校友：至少一項身份，且所有「目前身份」均取消勾選；其他成員請保持 null。轉回現任身份時須先清空畢業年月。'));
   // 建立／修改資訊是伺服器維護的整體，只展示、不加入可編輯表單。
   if (record?.created && record?.updated) {
@@ -227,12 +227,16 @@ function editContent(resource, record = null) {
     const related = element('section'); related.append(element('h3', '關聯論文'));
     for (const id of data.publicationIds || []) {
       const paper = (state.refs.publications || []).find((item) => item.id === id);
-      related.append(element('p', `${paper?.label || id} — ${id}`));
+      related.append(element('p', paper?.label || '論文名稱未載入'));
     }
     if (!data.publicationIds?.length) related.append(element('p', '目前沒有關聯論文。請在論文作者中選擇此成員。'));
     workspace.append(related);
   }
-  const form = element('form'), controls = formFields(schema, data, Boolean(record));
+  const autoId = resource === 'people' || resource === 'publications';
+  // HTTP 測試也支援 getRandomValues，新增時建立一次，重試沿用同一識別碼。
+  const id = autoId ? (record?.data.id || Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    byte => byte.toString(16).padStart(2, '0')).join('')) : null;
+  const form = element('form'), controls = formFields(schema, data, Boolean(record), autoId);
   // 整組鎖定避免等待回應時繼續輸入，被成功回應覆蓋；不改動子欄位原本的disabled狀態。
   const fields = element('fieldset'); fields.append(...controls.nodes); form.append(fields);
   form.addEventListener('input', () => { state.dirty = true; });
@@ -244,6 +248,7 @@ function editContent(resource, record = null) {
     event.preventDefault(); error.textContent = ''; save.disabled = true; fields.disabled = true;
     try {
       const changed = controls.read();
+      if (autoId) changed.id = id;
       // 提早提示跨欄位衝突並保留輸入；真正的限制仍由API及離線資料驗證執行。
       if (resource === 'people' && changed.alumniSince != null &&
           (!changed.memberships?.length || changed.memberships.some(member => member.isCurrent))) {
@@ -270,14 +275,15 @@ async function contentList(resource, view = state.view) {
     workspace.append(element('p', '目前沒有記錄，點選「新增」建立第一筆內容。', { class: 'empty-state' }));
     return;
   }
-  const table = element('table');
-  const header = element('tr'); ['名稱', '版本', '操作'].forEach((s) => header.append(element('th', s))); table.append(header);
+  const table = element('table', '', { class: 'content-list' });
+  const header = element('tr'); ['名稱', '操作'].forEach((s) => header.append(element('th', s))); table.append(header);
   for (const record of result.items) {
     const row = element('tr'), data = record.data, actions = element('td');
-    row.append(element('td', data.name || data.title || data.metadata?.alt || data.id), element('td', record.version));
+    const name = data.name || data.title || data.metadata?.alt || data.id;
+    row.append(element('td', name, { title: name }));
     actions.append(button('開啟', () => editContent(resource, record)));
     actions.append(button('刪除', async () => {
-      if (!confirm(`確定刪除 ${data.id}？有關聯的記錄將拒絕刪除。`)) return;
+      if (!confirm(`確定刪除 ${name}？有關聯的記錄將拒絕刪除。`)) return;
       try {
         await api(`/api/v1/admin/content/${resource}/${encodeURIComponent(data.id)}?version=${record.version}`, { method: 'DELETE' });
         if (currentView(view)) { await contentList(resource, view); if (currentView(view)) notice('已刪除'); }
@@ -410,7 +416,7 @@ async function navigate(page, replace = false) {
   if (state.dirty && !confirm('目前有未儲存輸入，確定離開？')) { pageURL(state.page, true); return; }
   state.page = page; state.dirty = false;
   const view = ++state.view;
-  pageURL(page, replace); notice(''); document.title = `${pages[page]} · Lab 內容管理`;
+  pageURL(page, replace); notice(''); document.title = `${pages[page]} · CASINO Lab 內容管理`;
   for (const link of $('#navigation').querySelectorAll('a')) {
     if (link.getAttribute('href') === `#/${page}`) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');

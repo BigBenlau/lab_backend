@@ -862,7 +862,7 @@ class RegressionTests(unittest.TestCase):
                 self.assertEqual((await request(public, f'/api/v1/public/{resource}'))[0], 404)
             for resource in ('researchAreas', 'opportunities', 'siteSettings', 'news', 'schemaVersion'):
                 self.assertEqual((await request(app, f'/api/v1/admin/content/{resource}', token=token))[0], 422)
-            with patch.object(public.state.store, 'read', side_effect=StoreError('private path')):
+            with patch.object(public.state.store, 'connection', side_effect=StoreError('private path')):
                 for resource in ('home', 'people', 'people/p1', 'publications'):
                     status, data = await request(public, f'/api/v1/public/{resource}')
                     self.assertEqual(status, 503)

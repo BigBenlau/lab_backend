@@ -1,0 +1,5 @@
+# 資料卷已由恢復工具建立；Compose 只掛載指定的既有卷。
+volumes:
+  lab_data: !override
+    external: true
+    name: ${LAB_DATA_VOLUME:?missing validated recovery volume}

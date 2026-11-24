@@ -20,7 +20,7 @@ check_context() {
 check_web() {
     # 共用gateway建置前檢查頁面與設定；只讀檔案狀態，不讀初始化資料。
     check_context
-    for web_file in deploy/Dockerfile.gateway deploy/nginx.conf.template deploy/acme-stream.conf deploy/https-redirect.conf deploy/gateway-entrypoint.sh \
+    for web_file in deploy/Dockerfile.gateway public_frontend/deliverables/logo/casino-symbol.svg deploy/nginx.conf.template deploy/acme-stream.conf deploy/https-redirect.conf deploy/gateway-entrypoint.sh \
         admin_frontend/admin/index.html admin_frontend/admin/app.js admin_frontend/admin/style.css \
         public_frontend/dist/lab.html public_frontend/dist/lab.js public_frontend/dist/api.js \
         public_frontend/dist/lab.css public_frontend/dist/gold.css; do
@@ -50,6 +50,27 @@ check_build() {
 
 compose() {
     # 固定已使用的專案名稱／volume；不讀取.env，避免舊Host或端口繼續影響部署。
+    LAB_DATA_VOLUME=lab-backend_lab_data
+    # 權限不足或壞連結時須停止，否則可能誤掛回初始卷。
+    if [ -d "$PROJECT_ROOT/secrets" ] && [ ! -x "$PROJECT_ROOT/secrets" ]; then
+        echo '無法核對資料卷設定，請用部署管理帳戶執行' >&2
+        return 1
+    fi
+    if [ -L "$PROJECT_ROOT/secrets/active-volume" ]; then
+        echo '資料卷指標必須是普通檔案' >&2
+        return 1
+    fi
+    if [ -e "$PROJECT_ROOT/secrets/active-volume" ]; then
+        [ -f "$PROJECT_ROOT/secrets/active-volume" ] || return 1
+        LAB_DATA_VOLUME=$(cat "$PROJECT_ROOT/secrets/active-volume")
+        case "$LAB_DATA_VOLUME" in
+            *[!a-z0-9_-]*|'') echo '資料卷名稱無效' >&2; return 1 ;;
+            lab-restore-?*|lab-backend_lab_data) ;;
+            *) echo '無法辨識恢復卷名稱' >&2; return 1 ;;
+        esac
+        set -- -f "$PROJECT_ROOT/deploy/compose.recovery.yml" "$@"
+    fi
+    export LAB_DATA_VOLUME
     if [ "$LAB_HTTP_MODE" = true ]; then
         set -- -f "$PROJECT_ROOT/deploy/compose.http.yml" "$@"
     fi
@@ -82,6 +103,12 @@ case "${1:-help}" in
             tools python scripts/prepare_initial_data.py \
             --source /seed --output /data/private/initial "$@"
         ;;
+    snapshot)
+        # 主機以 root 開啟密碼檔，容器只從 stdin 接收；僅版本目錄掛入 tools。
+        compose run --rm --no-deps -T \
+            --volume /var/backups/lab/versions:/versions \
+            tools python scripts/maintenance.py snapshot /versions < /var/lib/lab-tls/backup-password
+        ;;
     maintenance)
         shift
         compose run --rm --no-deps tools python scripts/maintenance.py "$@"
@@ -105,7 +132,7 @@ case "${1:-help}" in
         echo '管理入口核對：admin-info（只列執行中的端口、模式與Cookie名稱；不需要.env）'
         echo '建置前檢查：check-web（只檢查官網程式檔案，不呼叫 Docker）'
         echo '首次內容：seed（預覽）| seed --apply（建立 CSV 與檔案 bundle）'
-        echo '維護：cli <命令> | maintenance <命令> | watch'
+        echo '線上備份：snapshot；維護：cli <命令> | maintenance <命令> | watch'
         echo '其餘參數原樣交給 docker compose；停止容器用 down，勿用 down -v 刪資料。'
         ;;
     *) compose "$@" ;;

@@ -393,12 +393,59 @@ class Store:
         """建立空庫或呼叫端明確提供的資料集；拒絕覆寫，不讀取參考檔。"""
         if self.public:
             raise StoreError('公開服務不可初始化')
-        if self.root.exists() and any(self.root.iterdir()):
-            raise StoreError('資料目錄非空，拒絕覆寫；舊 CSV 需另行匯入新目錄')
         state = empty_state() if initial_state is None else initial_state
         validate_state(state)
         validate_capacity(state)
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        # 兩個子目錄各自以 rename 發布。準備清單記錄 inode，重試僅接續同次初始化。
+        with exclusive_lock(self.root):
+            pending = self.root / '.init-pending'
+            names = {p.name for p in self.root.iterdir()}
+            ready = pending / 'ready.json'
+            if not names:
+                pending.mkdir(mode=0o700)
+                sync_dir(self.root)
+            elif pending.is_symlink() or not pending.is_dir() or names - {pending.name, 'content', 'private'}:
+                raise StoreError('資料目錄非空，拒絕覆寫')
+            marker = pending / 'format'
+            if not any(pending.iterdir()):
+                write_new(marker, b'lab-init-10')
+                sync_dir(pending)
+            if not marker.is_file() or read_file(marker) != 'lab-init-10':
+                raise StoreError('無法辨識初始化暫存區，保留原檔')
+            if not ready.exists():
+                if names - {pending.name}:
+                    raise StoreError('未辨識的資料目錄，拒絕覆寫')
+                # 未完成的建庫檔隔離在私有暫存區，沒有任何資料已發布。
+                for folder in ('content', 'private'):
+                    partial = pending / folder
+                    if partial.exists():
+                        shutil.rmtree(partial)
+                staged = Store(pending)
+                staged._create_databases(state)
+                identities = {n: (pending / n).stat().st_ino for n in ('content', 'private')}
+                draft = pending / 'ready.tmp'
+                draft.unlink(missing_ok=True)
+                write_new(draft, json.dumps(identities).encode())
+                draft.rename(ready)
+                sync_dir(pending)
+            identities = json_loads(read_file(ready))
+            for name in ('content', 'private'):
+                source, target = pending / name, self.root / name
+                existing = target if target.exists() else source
+                if existing.is_symlink() or existing.stat().st_ino != identities[name]:
+                    raise StoreError('初始化來源已改變')
+                if existing == source:
+                    source.rename(target)
+                    sync_dir(self.root)
+            # 原子移走完成記號，避免刪除記號後當機而誤判為未完成。
+            completed = self.root / 'private' / '.init-complete'
+            pending.rename(completed)
+            sync_dir(self.root)
+            shutil.rmtree(completed)
+
+    def _create_databases(self, state):
+        """只在全新的暫存路徑建表；關閉 SQLite 之後才能移動已提交資料。"""
         for path in (self.content_path, self.admin_path):
             path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             write_new(path, b'')

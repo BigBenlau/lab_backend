@@ -91,3 +91,9 @@ th { background: #e7eff3; font-size: .9rem; }
   td, th { padding: .5rem; }
   .stat-card { padding: 1rem; }
 }
+
+/* 保留按鈕所需寬度，長標題在列表截短；開啟後可閱讀和編輯全文。 */
+.content-list { table-layout: fixed; }
+.content-list th:last-child { width: 12rem; }
+.content-list td:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.content-list td:last-child { white-space: nowrap; }

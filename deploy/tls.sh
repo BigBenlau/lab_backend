@@ -2,6 +2,15 @@
 # 在 SAS 主機協調 Docker 與兩個唯讀 TLS 掛載。ACME 帳戶和站點私鑰只存私人目錄。
 set -euo pipefail
 umask 077
+stage=configuration
+# 排程日誌只含固定階段名；lego 的原始輸出可能包含電子信箱。
+log_status() {
+  if [[ ${LAB_TLS_CRON:-0} == 1 ]]; then
+    if [[ $1 == 0 ]]; then logger -t lab-tls OK
+    else logger -p daemon.err -t lab-tls "FAILED stage=$stage"; fi
+  fi
+}
+trap 'log_status "$?"' EXIT
 state=/var/lib/lab-tls
 image=goacme/lego:v5.6.0
 validator=lab-tls-validation
@@ -146,10 +155,11 @@ fresh() {
   verify_identities -attime "$deadline" >/dev/null 2>&1
 }
 verify_pair() {
-  [[ -f $cert && ! -L $cert && -f $key && ! -L $key ]] || die '憑證及私鑰必須為普通檔案'
-  verify_identities
-  openssl x509 -in "$cert" -noout -pubkey > "$tmp/cert.pub"
-  openssl pkey -in "$key" -pubout > "$tmp/key.pub"
+  local candidate=${1:-$key}
+  [[ -f $cert && ! -L $cert && -f $candidate && ! -L $candidate ]] || return 1
+  verify_identities || return 1
+  openssl x509 -in "$cert" -noout -pubkey > "$tmp/cert.pub" || return 1
+  openssl pkey -in "$candidate" -passin pass: -pubout > "$tmp/key.pub" || return 1
   cmp -s "$tmp/cert.pub" "$tmp/key.pub"
 }
 
@@ -168,7 +178,8 @@ fi
 tmp=$(mktemp -d "$state/work.XXXXXXXX")
 finish() {
   rc=$?
-  trap - EXIT HUP INT TERM
+  trap - HUP INT TERM
+  trap 'log_status "$?"' EXIT
   rm -rf -- "$tmp"
   if [[ -d $pending ]]; then
     # 還原失敗會以非零狀態退出，保留 pending 供人工或下次重試。
@@ -179,9 +190,26 @@ finish() {
 trap finish EXIT
 trap 'exit 1' HUP INT TERM
 
+stage=cache
 issue=true
-if fresh; then
-  verify_pair
+if fresh && ! verify_pair >/dev/null 2>&1; then
+  # 有效葉憑證可能遺失快取私鑰。先嘗試已安裝且公鑰吻合的副本。
+  for dir in "${dirs[@]}"; do
+    if verify_pair "$dir/key.pem" >/dev/null 2>&1; then
+      replace_pem "$dir/key.pem" "$key"
+      break
+    fi
+  done
+  if ! verify_pair >/dev/null 2>&1; then
+    # 隔離無法使用的快取，讓 lego 重新簽發；現用 PEM 仍服務至新憑證通過核對。
+    quarantine=$(mktemp -d "$state/invalid-cache.XXXXXXXX")
+    for ext in crt key json issuer.crt; do
+      old="$state/lego/certificates/$cert_name.$ext"
+      if [[ -e $old || -L $old ]]; then mv -- "$old" "$quarantine/"; fi
+    done
+  fi
+fi
+if fresh && verify_pair; then
   issue=false
   if [[ -n $running ]] &&
      cmp -s "$cert" secrets/public-tls/cert.pem && cmp -s "$key" secrets/public-tls/key.pem &&
@@ -205,6 +233,7 @@ if [[ -n $running ]]; then touch "$tmp/backup/reload"; fi
 mv "$tmp/backup" "$pending"
 
 if "$issue"; then
+  stage=issuance
   # 網站上線後由 gateway 分流。首次上線前才由 lego 直接綁定公網 443。
   if [[ -n $running ]]; then
     network=(--network lab-backend_edge)
@@ -222,13 +251,16 @@ if "$issue"; then
   verify_pair
 fi
 
+stage=installation
 rm -- "$pending/preparing"
 for dir in "${dirs[@]}"; do
   replace_pem "$cert" "$dir/cert.pem"
   replace_pem "$key" "$dir/key.pem"
 done
 if [[ -n $running ]]; then
+  stage=reload
   reload_gateway
+  stage=handshake
   for attempt in {1..10}; do
     if serving; then break; fi
     (( attempt < 10 )) || die '兩個端口的握手或憑證指紋檢查失敗'

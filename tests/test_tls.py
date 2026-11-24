@@ -132,6 +132,16 @@ exec ''' + shlex.quote(self.openssl) + ' "$@"')
             self.assertEqual((directory / 'cert.pem').read_bytes(), leaf)
             self.assertEqual((directory / 'key.pem').read_bytes(), key)
 
+    def test_fresh_certificate_recovers_missing_key_from_live_mount(self):
+        self.candidate(self.sans)
+        self.invoke('issue', OFFLINE='1')
+        cached = next(self.cache.glob('*.key'))
+        cached.unlink()
+        calls = self.invoke('renew')
+        self.assertEqual(cached.read_bytes(), (self.mounts[0] / 'key.pem').read_bytes())
+        self.assertNotIn('docker run', calls)
+        self.assertNotIn('nginx -s reload', calls)
+
     def test_incomplete_certificate_and_offline_bootstrap(self):
         for sans in [self.sans[:3], self.sans[:2] + self.sans[3:], self.sans[:3] + [f'DNS:{self.ip}'],
                      self.sans[:3] + ['IP:203.0.113.11'], self.sans + ['DNS:extra.example.org']]:

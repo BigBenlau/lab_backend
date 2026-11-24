@@ -47,3 +47,10 @@ public_frontend/dist/**
 !public_frontend/dist/api.js
 !public_frontend/dist/lab.css
 !public_frontend/dist/gold.css
+
+# 管理登入頁使用專案既有的品牌圖。
+!public_frontend/deliverables/
+public_frontend/deliverables/**
+!public_frontend/deliverables/logo/
+public_frontend/deliverables/logo/**
+!public_frontend/deliverables/logo/casino-symbol.svg
