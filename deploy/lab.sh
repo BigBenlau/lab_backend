@@ -104,10 +104,19 @@ case "${1:-help}" in
             --source /seed --output /data/private/initial "$@"
         ;;
     snapshot)
-        # 主機以 root 開啟密碼檔，容器只從 stdin 接收；僅版本目錄掛入 tools。
+        # 備份掛載以腳本所在的專案為準，cron 的工作目錄不影響輸出位置。
+        versions="$PROJECT_ROOT/versions"
+        if [ -L "$versions" ]; then
+            echo '專案 versions 須為實體目錄' >&2; exit 1
+        fi
+        if [ "$(id -u)" = 0 ]; then
+            install -d -o 10001 -g 10001 -m 0700 -- "$versions"
+        elif [ ! -d "$versions" ]; then
+            echo '請先以 root 執行 lab-backup run 建立專案 versions 目錄' >&2; exit 1
+        fi
         compose run --rm --no-deps -T \
-            --volume /var/backups/lab/versions:/versions \
-            tools python scripts/maintenance.py snapshot /versions < /var/lib/lab-tls/backup-password
+            --volume "$versions:/versions" \
+            tools python scripts/maintenance.py snapshot /versions </dev/null
         ;;
     maintenance)
         shift

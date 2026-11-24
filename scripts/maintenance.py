@@ -410,17 +410,15 @@ def restore_static(archive_path, database_backup, target, apply=False):
 
 
 def snapshot_json(version, site, state):
-    """固定設定與三類內容可攜出；私有帳戶、審計和編輯版本只進加密備份。"""
+    """固定設定與三類內容可攜出；私有帳戶、審計和編輯版本只進資料庫備份。"""
     return {'format': 'lab-site-1', 'version': version, 'site': site,
             'content': {key: [data_only(key, row) for row in state[key]] for key in MODELS}}
 
 
-def snapshot(store, versions, password):
+def snapshot(store, versions):
     """線上快照只在讀 SQLite 時持讀交易。完整版本以同一檔案系統的 rename 發布。"""
-    from lab_backend.auth import strong_password
     version = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:12]
     with backup_job(store, 'snapshot', version) as job:
-        strong_password(password)
         if versions.is_symlink() or versions.resolve().is_relative_to(store.root.resolve()):
             raise ValueError('請使用資料卷外的私人備份目錄')
         with tempfile.TemporaryDirectory(dir=versions, prefix='.writing-') as temp:
@@ -428,7 +426,7 @@ def snapshot(store, versions, password):
             pending.mkdir(mode=0o700)
             inventory = static_inventory(store.root / 'public')
             state = store.read(include_audit=True)
-            db = write_database_backup(state, pending / 'database.enc', password)
+            db = write_database_backup(state, pending / 'database.zip')
             archive = pending / 'public.zip'
             write_static(store.root / 'public', archive, version, db, state, inventory)
             # 以封存檔內實際複製的固定設定生成快照，避免再次讀線上目錄。
@@ -443,9 +441,9 @@ def snapshot(store, versions, password):
     return {'version': version, 'ok': True}
 
 
-def rebuild(store, archive, database, password, *, document=None, expected_version=None, apply=False):
+def rebuild(store, archive, database, password=None, *, document=None, expected_version=None, apply=False):
     """新卷內排演整套恢復；驗證舊配對或新版三件組後才准許部署者切卷。"""
-    encrypted_hash = file_hash(database)
+    database_hash = file_hash(database)
     state = read_backup(database, password)
     with empty_target(store) as staging:
         web = staging / 'public'
@@ -453,7 +451,7 @@ def rebuild(store, archive, database, password, *, document=None, expected_versi
         if expected_version is not None and result['version'] != expected_version:
             raise ValueError('版本目錄名稱與備份內容不一致')
         manifest = json_loads(read_file(web / 'manifest.json'))
-        if manifest['databaseSha256'] != encrypted_hash or manifest['contentHash'] != content_hash(state):
+        if manifest['databaseSha256'] != database_hash or manifest['contentHash'] != content_hash(state):
             raise ValueError('靜態檔與資料快照不符')
         (web / 'manifest.json').unlink()
         site = load_site(web)
@@ -627,15 +625,11 @@ def main():
     config = Config.load()
     store = Store(config.storage)
     try:
-        if args.command in ('snapshot', 'rebuild'):
-            # 排程由 root 將私密檔導向 stdin；密碼不經 argv、環境或日誌。
-            import getpass
-            password = getpass.getpass('備份密碼: ') if sys.stdin.isatty() else sys.stdin.readline(512).rstrip('\r\n')
-            if args.command == 'snapshot':
-                result = snapshot(store, args.versions, password)
-            else:
-                result = rebuild(store, args.archive, args.database, password, document=args.site,
-                                 expected_version=args.expected_version, apply=args.apply)
+        if args.command == 'snapshot':
+            result = snapshot(store, args.versions)
+        elif args.command == 'rebuild':
+            result = rebuild(store, args.archive, args.database, document=args.site,
+                             expected_version=args.expected_version, apply=args.apply)
         elif args.command == 'rebuild-site': result = rebuild_site(store, args.document, args.assets_root, args.apply)
         elif args.command == 'install-public': result = install_public(store, args.source, args.apply)
         elif args.command == 'check-files': result = check_files(store, args.web_root)

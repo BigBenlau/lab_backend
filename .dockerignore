@@ -1,5 +1,5 @@
 # 兩個映像共用專案根目錄context與本白名單；各Dockerfile只COPY自身所需檔案。
-# 預設排除全部：Git、機密、初始化data/assets、執行庫、備份及開發資料均不傳給builder。
+# 預設排除全部：Git、機密、初始化data/assets、執行庫、根目錄 versions/ 備份及開發資料均不傳給builder。
 **
 
 # Python API與離線維護；開目錄後重新排除內容，再逐一放行必要檔案。

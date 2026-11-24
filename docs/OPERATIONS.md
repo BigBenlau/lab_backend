@@ -58,9 +58,9 @@ git rev-parse --short HEAD
 )
 ```
 
-### 1.2 在舊站運行時建置新版
+### 1.2 第 3 步（上） 在舊站運行時建置新版
 
-在 SAS 執行 `sudo -i`。以下主機命令都在這個 root 終端執行。先看 80 是否可用或由原 gateway 佔用；若是另一個網站，先安排釋放端口。確認目前資料卷與 Compose 選用的卷相同。兩個 API 共用 Python 映像，只需建置 `public-api` 和 `gateway`。
+完成 SAS 上的 `git pull --ff-only origin main` 後，執行 `sudo -i`，再貼下面的命令。第 3、4 步都用同一個 SAS root 終端。先用 `ps` 確認原站三個容器正在運行，再對照兩份端口輸出。80 可以空閒或由本專案 gateway 佔用；如果是其他容器或主機 Nginx，先釐清它服務哪個網站，再安排釋放端口。
 
 ```sh
 cd -- "$(cat /var/lib/lab-tls/project)"
@@ -68,6 +68,8 @@ sh deploy/lab.sh ps
 ss -ltnp 'sport = :80'
 docker ps --format 'table {{.Names}}\t{{.Ports}}'
 ```
+
+下面這組命令先核對線上管理 API 正在使用的資料卷，接著建置兩個映像。兩個 API 共用 `lab-api:demo`；`lab-gateway:demo` 包含兩個網站的程式與 Nginx 設定。`check-config` 用現有憑證啟動臨時設定檢查。成功後才安裝續期與備份命令。此時原站仍在服務。
 
 ```sh
 (
@@ -88,39 +90,26 @@ docker ps --format 'table {{.Names}}\t{{.Ports}}'
 
 <a id="backup-setup"></a>
 
-### 1.3 切換前備份現有資料
+### 1.3 第 3 步（下） 備份目前資料並驗證能還原
 
-首次啟用時建立備份目錄與密碼，將密碼另行安全保管。已有備份的主機沿用原密碼；從異地備份重建時先取回原密碼。之後每次更新可從 `lab-backup run` 開始。
-
-```sh
-install -d -o root -g root -m 0700 /var/backups/lab
-install -d -o 10001 -g 10001 -m 0700 /var/backups/lab/versions
-# 全新的備份才建立密碼。若已有異地備份，請先從獨立保管處取回原密碼。
-(
-  set -eu
-  key=/var/lib/lab-tls/backup-password
-  if [ ! -e "$key" ]; then
-    [ -z "$(ls -A /var/backups/lab/versions)" ] || { echo '請先取回原備份密碼' >&2; exit 1; }
-    (umask 077; set -C; openssl rand -hex 32 > "$key")
-  fi
-  test -s "$key"
-)
-```
+執行下面的命令即可。首次備份會在登記的專案根目錄建立私人 `versions/`（UID/GID 10001，權限 0700）。手動執行與 root cron 都寫入同一位置，每次新增一個版本，免設備份密碼。
 
 ```sh
 /usr/local/sbin/lab-backup run
 ```
 
-複製這次輸出的 `version`。執行下一行，貼上版本目錄名稱後按 Enter。演練成功後才開始替換容器。
+預期輸出包含 `"ok": true` 和 `"version"`。複製本次的版本名稱，省略引號，執行下面兩行並在提示後貼上。工具在獨立暫存卷重建並核對同一版本的 `site.json`、`database.zip` 和 `public.zip`。
 
 ```sh
 printf '備份 version：'
 read -r VERSION && /usr/local/sbin/lab-backup verify "$VERSION"
 ```
 
-### 1.4 替換三個容器並檢查入口
+演練成功時會輸出相同的 `version` 和 `"applied": false`，代表線上卷仍在原位。若 `run` 或 `verify` 失敗，保留原站繼續服務，先處理錯誤。尤其當 `run` 成功而 `verify` 報路徑無效時，檢查靜態檔名（例如含 `#` 的 PDF），等新備份可驗證後再繼續。
 
-以下會短暫中斷服務，管理員需要重新登入。現有站直接重用資料卷，跳過首次建庫與匯入。正式環境使用下列命令；明文測試站另見[第 6 節](#http-test)。
+### 1.4 第 4 步 在維護時段切換容器
+
+在 SAS 原專案目錄執行以下命令。替換容器會短暫中斷服務，管理員需要重新登入。`flock` 會等待正在執行的續期，`--no-build` 使用第 3 步建好的映像。現有站沿用資料卷，跳過 `init`、`seed` 和 `down -v`。正式命令省略 `http` 參數；明文測試另見[第 6 節](#http-test)。
 
 ```sh
 (
@@ -134,22 +123,75 @@ read -r VERSION && /usr/local/sbin/lab-backup verify "$VERSION"
   done
   sh deploy/lab.sh maintenance check-files /data/public
   /usr/local/sbin/lab-tls renew
-  curl -sSI -H 'Host: casino.ye.wang' http://127.0.0.1/
 )
 ```
 
-兩個 `readyz` 應各回 200，本機 HTTP 應回 301 並帶有 `Location: https://casino.ye.wang/`。原先有啟用監測的主機再執行 `sh deploy/lab.sh watch`。在 SAS 防火牆放行公網 TCP 80、443，27182 限管理員出口 IP，27181 維持關閉。從防火牆允許的**管理員電腦**，在已更新的本機專案目錄執行：
+預期兩個 API 都是 healthy，兩個 `readyz` 各回 200，`admin-info` 顯示 `origin_scheme=https`。`ps` 應顯示 gateway 映射 `80->8080`、`443->8443`、`27182->27182`。Nginx 設定與缺檔檢查都要成功，`renew` 會核對目前線上憑證，達續期門檻才申請更新。若啟動失敗，留在這一步，用 `sh deploy/lab.sh logs --tail 80 gateway public-api admin-api` 查看原因。原先已啟用監測的主機，再執行 `sh deploy/lab.sh watch`。
+
+### 1.5 第 5 步 逐一驗證四個 HTTP 入口，核對管理後台與排程
+
+**5a．在 SAS 檢查 Nginx。** 這台 SAS 共用一個公網 IPv4 和 TCP 80。以下模擬訪客使用四個不同的 Host 造訪同一路徑，直接連本機，先排除公網 DNS 及防火牆的影響。
+
+```sh
+SAS_IPV4=$(cat /var/lib/lab-tls/ip)
+for site_host in casino.ye.wang crab.ye.wang ye.wang "$SAS_IPV4"; do
+  printf '%s -> ' "$site_host"
+  curl -4 -sS --noproxy '*' --max-time 8 -o /dev/null \
+    -H "Host: $site_host" -w '%{http_code} %{redirect_url}\n' \
+    'http://127.0.0.1:80/api/home?check=1'
+done
+```
+
+四行都應顯示 `301 https://原來的主機/api/home?check=1`。確認後，在阿里雲香港 SAS 的防火牆對公眾放行 TCP **80、443**，TCP **27182** 仍只允許管理員的出口 IP，測試用 **27181** 保持關閉。
+
+**5b．在外部電腦檢查訪客的完整路徑。** 使用自己的終端，輸入剛才 SAS 上 `cat /var/lib/lab-tls/ip` 的值。這個檢查只使用公開端口，會使用正常 DNS 與系統憑證信任鏈。路徑特意帶查詢字串，以檢查轉址是否保留原頁面。
 
 ```sh
 printf 'SAS 公網 IPv4：'
-read -r SAS_IPV4 && sh deploy/check-site.sh "$SAS_IPV4"
+read -r SAS_IPV4
 ```
 
-確認三個域名與 IP 各輸出一行「通過」，再用瀏覽器查看成員、論文、圖片／PDF，並以原帳密登入管理端口 27182。
+```sh
+(
+  : "${SAS_IPV4:?請先輸入 SAS 公網 IPv4}"
+  probe_uri='/api/home?check=1'
+  failed=0
+  for site_host in casino.ye.wang crab.ye.wang ye.wang "$SAS_IPV4"; do
+    start_url="http://$site_host:80$probe_uri"
+    target_url="https://$site_host$probe_uri"
+    last='未執行'
+    if first=$(curl -4 -sS --noproxy '*' --max-time 12 -o /dev/null \
+         -w '%{http_code} %{redirect_url}' "$start_url") &&
+       [ "$first" = "301 $target_url" ] &&
+       last=$(curl -4 -sSL --noproxy '*' --proto-redir '=https' --max-redirs 1 \
+         --max-time 15 -o /dev/null -w '%{num_redirects} %{http_code} %{url_effective}' "$start_url") &&
+       [ "$last" = "1 200 $target_url" ]; then
+      printf '通過 %s -> %s -> HTTPS 200\n' "$site_host" "$first"
+    else
+      printf '失敗 %s，首跳 [%s]，跟隨結果 [%s]\n' "$site_host" "$first" "$last" >&2
+      failed=1
+    fi
+  done
+  exit "$failed"
+)
+```
 
-### 1.5 首次啟用每月備份及憑證續期排程
+預期四行「通過」。每行表示訪客使用該域名或 IP 從 80 進站，收到 301，跟隨一次跳轉後以有效憑證連上同一主機的 443，首頁 API 回 200。
 
-回到 SAS root 終端。使用 `crontab -e` 將以下兩項各保留一行，保留其他無關工作。已有相同排程的主機可跳過編輯。
+| 觀察到的結果 | 下一個檢查 |
+|---|---|
+| SAS 本機回 200 或看到 Nginx 歡迎頁 | 查 `sh deploy/lab.sh admin-info` 和 `docker ps`，確認正式 gateway 取得主機 80。 |
+| 本機四項成功，外網四項都連不上 80 | 查 SAS 防火牆的入站 TCP 80 規則、目標實例及來源範圍。 |
+| 公網 IP 成功，只有某個域名失敗 | 查該名稱的 A／CNAME 是否解析到同一 IPv4。若首跳回 400，在 SAS 用 `openssl x509 -in secrets/public-tls/cert.pem -noout -ext subjectAltName` 核對憑證涵蓋該名稱。 |
+| 首跳 301，跟隨後出現 TLS 錯誤或 API 回 503 | TLS 錯誤查 443 提供的憑證名稱、IP、期限及憑證鏈；503 查 public-api 的 `readyz` 和容器日誌。 |
+
+**5c．在獲准的管理員網絡驗證後台。** 從已 `git pull` 的本機專案目錄執行以下命令，沿用 5b 的 IPv4。腳本另外檢查管理入口的明文導航跳回 HTTPS 27182、登入頁回 200，以及未登入的 session 查詢回 401。之後用瀏覽器核對成員、論文及一個 PDF，並用原帳密登入管理後台。
+
+```sh
+sh deploy/check-site.sh "$SAS_IPV4"
+```
+
+**5d．回到 SAS root 終端啟用排程。** 使用 `crontab -e` 將以下兩項各保留一行，保留其他無關工作。已有相同排程的主機可跳過編輯。
 
 ```sh
 systemctl enable --now cron
@@ -163,10 +205,13 @@ crontab -e
 
 ```sh
 crontab -l
+systemctl is-active cron
 date '+%F %T %Z'
+journalctl -t lab-tls --since yesterday --no-pager
+journalctl -t lab-backup --since '35 days ago' --no-pager
 ```
 
-憑證每六小時檢查一次，每月 1 日 02:30 按主機時區產生一份新備份。按[第 2 節](#backup)將同一版本的三個檔案複製到異地。
+預期 cron 為 `active`。憑證每天 00:00、06:00、12:00、18:00 檢查，每月 1 日 02:30 按主機時區產生新備份。`crontab -l` 顯示已儲存的排程；要確認自動執行，請在下一個排程時間後查看同時段的日誌，月備份再核對 `./versions/` 出現的新版本。按[第 2 節](#backup)將同一版本的三個檔案複製到異地。
 
 **若更新失敗**，先在 SAS 執行 `sh deploy/lab.sh logs --tail 80 gateway public-api admin-api`。若要退回程式，可在開發端依 1.1 記下的提交號找出需要撤回的變更，將修正提交推送到 `main`，再依 1.1、1.2、1.4 拉取和部署修正版。若要回復某次備份的內容，再使用[資料恢復流程](#recover)。
 
@@ -174,17 +219,50 @@ date '+%F %T %Z'
 
 ## 2. 每月產生一份新的 site.json
 
-每次備份讀取一次已提交的資料庫快照，產生獨立 UTC 版本，例如 `20261124T183000Z-0123456789ab/`。輸出目錄在主機的 `/var/backups/lab/versions/`，整組成功後才對外顯示該版本。一般內容編輯和瀏覽可照常進行。大量更換實體圖片、PDF 或固定設定請避開備份時段，程式發現檔案在複製期間改變會報錯。
+每次備份讀取一次已提交的資料庫快照，產生獨立 UTC 版本，例如 `20261124T183000Z-0123456789ab/`。輸出目錄是 SAS 專案根目錄的 `versions/`。整組成功後才會出現該版本目錄。一般內容編輯和瀏覽可照常進行。大量更換實體圖片、PDF 或固定設定請避開備份時段，程式發現檔案在複製期間改變會報錯。
 
 | 一個版本內的檔案 | 可恢復的內容 |
 |---|---|
 | `site.json` | 可閱讀的 UTF-8 整站內容。包含固定設定及三類業務資料，保留 ID、作者關聯、論文入庫順序與檔案路徑。含成員資料，請私下保存。 |
 | `public.zip` | 實際照片、品牌圖、PDF、該版本的公開固定設定及逐檔校驗清單。外部網站連結只保留網址。 |
-| `database.enc` | 加密的 SQLite10 邏輯備份，涵蓋內容、管理帳戶、密碼雜湊、編輯版本和審計。完整恢復需要備份密碼。 |
+| `database.zip` | 免密碼的 SQLite10 邏輯備份，保存五張表，包含管理帳戶、密碼雜湊、編輯版本及審計。可讀取壓縮檔的人也可讀取其中資料，請限制存取。 |
 
 瀏覽器讀取的 `/data/site.json` 只有品牌及固定頁面設定。**備份的整站 `site.json` 要放在私人版本目錄**。把它上傳到官網或複製到 `/data/public/site.json` 會暴露整站資料，也會破壞前端的固定設定格式。
 
-首次啟用或手動產生一份新備份，請執行[備份設定與演練](#backup-setup)的命令。
+在 SAS 專案根目錄執行 `sudo ls -lt ./versions/` 可查看已有版本。每次的完整目錄是 `./versions/<版本>/`，維護容器執行備份時將它的父目錄掛載為 `/versions`。根 `.gitignore` 排除整個 `/versions/`，兩個映像的建置白名單也排除它。只有備份／恢復工具掛載這些檔案。重新取得專案或清理工作目錄時要保留這個資料夾；`git clean -fdx` 會刪除被忽略的備份。
+
+**已上線，只更新備份工具。** 在包含專案內備份路徑的版本發布到 GitHub 後，先以原部署帳戶在專案目錄執行 `git pull --ff-only origin main`；再於 SAS 的 root 終端執行下面的命令。維護容器會使用新建置的共用 Python 映像。本次可以保持三個網站服務容器運行。
+
+```sh
+cd -- "$(cat /var/lib/lab-tls/project)"
+sh deploy/lab.sh build public-api &&
+  install -o root -g root -m 0700 deploy/backup.sh /usr/local/sbin/lab-backup
+```
+
+首次啟用或手動產生一份新備份，請執行[備份設定與演練](#backup-setup)的命令。已有每月 1 日的 root cron 時可直接沿用。舊版本目錄若含 `database.enc`，驗證及恢復時仍需要原來的 `/var/lib/lab-tls/backup-password`；請與舊備份一併妥善保存。
+
+**已有舊路徑備份的 SAS**。如需在新版工具管理先前的版本，可在安裝新版 `lab-backup` 後於 root 終端執行以下一次性複製。每個版本先複製到隱藏暫存目錄，完成後才改名並執行驗證。若目的地已有同名版本則跳過複製，只驗證現有版本。請保留來源直到已核對目的地及異地副本。
+
+```sh
+(
+  set -eu
+  cd -- "$(cat /var/lib/lab-tls/project)"
+  [ ! -L versions ] || { echo 'versions 須為實體目錄'; exit 1; }
+  install -d -o 10001 -g 10001 -m 0700 -- versions
+  for src in /var/backups/lab/versions/*; do
+    [ -d "$src" ] || continue
+    [ ! -L "$src" ] || exit 1
+    version=${src##*/}
+    if [ ! -e "versions/$version" ]; then
+      stage=$(mktemp -d versions/.copy.XXXXXXXX)
+      cp -a -- "$src" "$stage/"
+      mv -nT -- "$stage/$version" "versions/$version"
+      rmdir -- "$stage"
+    fi
+    /usr/local/sbin/lab-backup verify "$version"
+  done
+)
+```
 
 **啟用排程**。執行 `systemctl enable --now cron` 與 `crontab -e`。在 root 的 crontab 中，將既有的 `lab-backup run` 那一行替換為下列設定；首次啟用時才新增。每月 **1 日凌晨 02:30**（SAS 主機時區）執行一次。若只靠排程備份，還原時可能失去上次成功備份後最多約一個月的編輯。
 
@@ -196,16 +274,16 @@ date '+%F %T %Z'
 crontab -l
 date '+%F %T %Z'
 journalctl -t lab-backup --since '35 days ago' --no-pager
-du -sh /var/backups/lab/versions
-df -h /var/backups/lab/versions
+du -sh ./versions
+df -h ./versions
 ```
 
 已啟用常駐監測的主機，同步新版專案後執行 `sh deploy/lab.sh build public-api` 和 `sh deploy/lab.sh watch`，讓監測容器載入新的 32 天逾期門檻。
 
-每次保留新版本，備份不會自動輪替。按磁碟容量訂定保留期限，只清理已核對異地副本且已超出保留期的版本。**同機備份無法應付整台 SAS 或磁碟遺失。** 將每個已完成的版本目錄整組複製到另一台受控主機或禁止公開讀取、開啟加密及版本保護的物件儲存；完整還原密碼由另一處私密儲存保管。有可用的受控 SSH 備份主機時，可在 SAS 端以如下命令傳送（替換帳戶及目的地，SSH 可只開在接收端）。定期從異地取回一組實際演練。
+每次保留新版本，備份不會自動輪替。按磁碟容量訂定保留期限，只清理已核對異地副本且已超出保留期的版本。**同機備份無法應付整台 SAS 或磁碟遺失。** 將每個已完成的版本目錄整組複製到另一台受控主機或禁止公開讀取、開啟加密及版本保護的物件儲存。有可用的受控 SSH 備份主機時，可在 SAS 端以如下命令傳送（替換帳戶及目的地，SSH 可只開在接收端）。定期從異地取回一組實際演練。
 
 ```sh
-rsync -a --exclude='.*' /var/backups/lab/versions/ backup-user@backup-host:/private/lab/versions/
+rsync -a --exclude='.*' ./versions/ backup-user@backup-host:/private/lab/versions/
 ```
 
 <a id="verify"></a>
@@ -215,14 +293,14 @@ rsync -a --exclude='.*' /var/backups/lab/versions/ backup-user@backup-host:/priv
 
 **恢復流程**是選定一份備份，重建出當時的 SQLite 和實體檔案，核對可讀後再決定是否讓網站使用它。只想知道「備份真的能用嗎」時，做到第 1 步即可。
 
-1. **演練**。在 root shell 填入實際版本。工具解密資料、重建五張表、檢查版本與內容、照片與 PDF 的 SHA256、作者及檔案關聯，完成後移除本次演練卷。現有三個容器可繼續服務。失敗時先核對是否取齊同一版本的三個檔、密碼是否正確、空間是否足夠。
+1. **演練**。在 root shell 填入實際版本。工具讀取資料備份、重建五張表、檢查版本與內容、照片與 PDF 的 SHA256、作者及檔案關聯，完成後移除本次演練卷。現有三個容器可繼續服務。失敗時先核對是否取齊同一版本的三個檔，以及目錄權限和磁碟空間。
 
 ```sh
 VERSION='請填寫版本目錄名稱'
 /usr/local/sbin/lab-backup verify "$VERSION"
 ```
 
-2. **重建可上線的卷**。需要還原時才執行。若曾從異地取回，先將三個檔放回 `/var/backups/lab/versions/$VERSION/`，版本目錄限 0700、文件限 0600，擁有者設為 10001:10001，讓維護容器讀取。工具再次完整核對，成功後輸出 `volume=lab-restore-…`，此時網站仍讀原卷。
+2. **重建可上線的卷**。需要還原時才執行。若曾從異地取回，先將三個檔放回 `./versions/$VERSION/`，版本目錄限 0700、文件限 0600，擁有者設為 10001:10001，讓維護容器讀取。工具再次完整核對，成功後輸出 `volume=lab-restore-…`，此時網站仍讀原卷。
 
 ```sh
 /usr/local/sbin/lab-backup rebuild "$VERSION"
@@ -248,16 +326,17 @@ PREVIOUS=$(cat secrets/previous-volume)
 /usr/local/sbin/lab-backup activate "$PREVIOUS"
 ```
 
-**原主機已遺失**。新 SAS 先按下節安裝 Docker、取回相容程式版本、建映像和配置憑證；還原備份密碼及已完成版本，安裝兩個主機工具。在新主機做第 1、2 步。首次啟動前，將已驗證卷名寫進 `secrets/active-volume`（root、0600），再 `sh deploy/lab.sh up -d --wait public-api admin-api gateway`。此時沒有舊站可退回，跳過首次 `init` 和 `seed`。最後重設兩條 root cron、核對外部連線，並作一次新備份。TLS／ACME 材料（`/var/lib/lab-tls/`、兩個 TLS 目錄）與程式發布版本另行私密備份；若新機沿用同一 IP 且兩處已安裝有效 PEM，可在資料卷備妥後啟動 gateway，再執行 `lab-tls renew`。若公網 IP 已變，先更新 DNS 及私有 `ip` 設定；將舊 PEM 留在私人備份，讓新機的兩個 TLS 安裝目錄為空，於 gateway 啟動前執行 `lab-tls issue`。
+**原主機已遺失**。新 SAS 先按下節安裝 Docker、取回相容程式版本、建映像和配置憑證；取回完整版本並安裝兩個主機工具。只有舊加密版本才需取回原備份密碼。在新主機做第 1、2 步。首次啟動前，將已驗證卷名寫進 `secrets/active-volume`（root、0600），再 `sh deploy/lab.sh up -d --wait public-api admin-api gateway`。此時沒有舊站可退回，跳過首次 `init` 和 `seed`。最後重設兩條 root cron、核對外部連線，並作一次新備份。TLS／ACME 材料（`/var/lib/lab-tls/`、兩個 TLS 目錄）與程式發布版本另行私密備份；若新機沿用同一 IP 且兩處已安裝有效 PEM，可在資料卷備妥後啟動 gateway，再執行 `lab-tls renew`。若公網 IP 已變，先更新 DNS 及私有 `ip` 設定；將舊 PEM 留在私人備份，讓新機的兩個 TLS 安裝目錄為空，於 gateway 啟動前執行 `lab-tls issue`。
 
 ### 只有內容 JSON，或只剩舊版配對備份
 
-完整備份優先使用上述步驟。若遺失管理庫的密碼，仍可用整站 `site.json` 加上對應的 `assets/`（從可信的同版靜態副本取得）重建業務資料。這條路徑需要重新建立具名管理員，審計亦會從頭開始。只有 JSON 時，可以取回文字、ID 與關聯，缺少已引用的照片或 PDF 會阻止啟用。工具不接受任意 JSON 上傳。
+完整備份優先使用上述步驟。若缺少資料庫壓縮檔，或遺失舊加密版本的備份密碼，仍可用整站 `site.json` 加上對應的 `assets/`（從可信的同版靜態副本取得）重建業務資料。這條路徑需要重新建立具名管理員，審計亦會從頭開始。只有 JSON 時，可以取回文字、ID 與關聯，缺少已引用的照片或 PDF 會阻止啟用。工具不接受任意 JSON 上傳。
 
 以下兩種情況都在全新的資料卷工作。先將輸入放入只准管理者存取的主機目錄，該目錄及檔案須允許 UID 10001 讀取。以下在同一個 root shell 執行，`INPUT` 換成實際絕對路徑。
 
 ```sh
-INPUT=/var/backups/lab/recovery-input
+cd -- "$(cat /var/lib/lab-tls/project)"
+INPUT="$PWD/versions/.recovery-input"
 TARGET=lab-restore-$(cat /proc/sys/kernel/random/uuid)
 docker volume create "$TARGET"
 recover_tool() {

@@ -1157,10 +1157,10 @@ class RegressionTests(unittest.TestCase):
         other = Store(self.root / 'restored')
         other.initialize()
         before = other.read(include_audit=True)
-        with patch('getpass.getpass', return_value='incorrect'), self.assertRaises(InvalidToken):
+        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value='incorrect'), self.assertRaises(InvalidToken):
             restore(other, archive, apply=True)
         self.assertEqual(other.read(include_audit=True), before)
-        with patch('getpass.getpass', return_value=self.password):
+        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value=self.password):
             restore(other, archive)
             self.assertEqual(other.read(include_audit=True), before)
             restore(other, archive, apply=True)

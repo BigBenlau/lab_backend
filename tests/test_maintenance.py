@@ -15,7 +15,7 @@ import zipfile
 from fixtures import sample_data, state_from_sample
 import test_regressions as helpers
 from lab_backend.application import public_app
-from lab_backend.cli import backup, backup_state, file_hash, import_csv, restore
+from lab_backend.cli import backup, backup_state, file_hash, import_csv, read_backup, restore
 from lab_backend.models import MODELS, new_metadata
 from lab_backend.store import Store, StoreError, encode_csv, exclusive_lock, json_size, validate_capacity
 from scripts.maintenance import snapshot, rebuild, rebuild_site, backup_static, check_files, container_probe, main, monitor, restore_static, verify_static
@@ -166,6 +166,19 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
 
+    def test_snapshot_binds_project_versions_and_rejects_symlink(self):
+        versions = self.root / 'versions'
+        versions.mkdir(mode=0o700)
+        result = self.run_command('snapshot')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.calls.read_text().splitlines()
+        self.assertEqual(args[args.index('--volume') + 1], f'{versions}:/versions')
+        self.calls.unlink()
+        versions.rename(self.root / 'elsewhere')
+        versions.symlink_to(self.root / 'elsewhere')
+        self.assertNotEqual(self.run_command('snapshot').returncode, 0)
+        self.assertFalse(self.calls.exists())
+
     def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
         for name in ('public_frontend/deliverables/logo/casino-symbol.svg', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh',
                      'admin_frontend/admin/index.html', 'admin_frontend/admin/app.js', 'admin_frontend/admin/style.css',
@@ -258,6 +271,40 @@ esac
         self.assertEqual((secrets / 'active-volume').read_text().strip(), 'lab-restore-good')
         self.assertEqual((secrets / 'previous-volume').read_text().strip(), 'lab-backend_lab_data')
 
+    def test_verify_uses_password_file_only_for_legacy_versions(self):
+        """主機上沒有備份密碼時也能驗證新版本。兩種封裝同時存在則拒絕。"""
+        state = self.root / 'private-state'
+        state.mkdir()
+        (state / 'project').write_text(str(self.root))
+        flock = self.root / 'bin/flock'
+        flock.write_text('#!/bin/sh\nexit 0\n')
+        flock.chmod(0o700)
+        bundle = self.root / 'versions/demo'
+        bundle.mkdir(parents=True)
+        for name in ('site.json', 'public.zip', 'database.zip'):
+            (bundle / name).touch()
+        script = self.root / 'backup.sh'
+        source = (Path(__file__).resolve().parents[1] / 'deploy/backup.sh').read_text()
+        script.write_text(source.replace('state=/var/lib/lab-tls', 'state="$TEST_ROOT"')
+                          .replace('$(cat /proc/sys/kernel/random/uuid)', 'synthetic')
+                          .replace('[ "$(id -u)" = 0 ]', 'true'))
+        docker = self.root / 'bin/docker'
+        docker.write_text('#!/bin/sh\nif [ "$1" = run ]; then echo "$*" > "$LAB_DOCKER_CALLS"; cat >> "$LAB_DOCKER_CALLS"; fi\n')
+        def verify():
+            return subprocess.run(['sh', str(script), 'verify', 'demo'], capture_output=True, timeout=10,
+                                  env={**self.env, 'TEST_ROOT': str(state)}).returncode
+        self.assertEqual(verify(), 0)
+        self.assertIn(f'type=bind,src={bundle},dst=/input,readonly', self.calls.read_text())
+        self.assertIn('/input/database.zip', self.calls.read_text())
+        (bundle / 'database.enc').touch()
+        self.assertNotEqual(verify(), 0)
+        (bundle / 'database.zip').unlink()
+        self.assertNotEqual(verify(), 0)
+        (state / 'backup-password').write_text('synthetic-only\n')
+        self.assertEqual(verify(), 0)
+        self.assertIn('/input/database.enc', self.calls.read_text())
+        self.assertTrue(self.calls.read_text().endswith('synthetic-only\n'))
+
     def test_root_gitignore_protects_data_and_keeps_deployable_code(self):
         """用真正Git比對合成路徑；不讀私人檔案、不更改本專案索引。"""
         (self.root / '.gitignore').write_text((Path(__file__).resolve().parents[1] / '.gitignore').read_text())
@@ -269,6 +316,7 @@ esac
                    'elsewhere/test.pfx', 'storage/content/content.db', 'copy.db-journal', 'copy.db-mj123',
                    'copy.sqlite-wal', 'copy.sqlite3-shm', 'copy.csv', 'copy.enc', 'backup.tar.gz',
                    'backup.zip', 'imports/people.csv', 'exports/data.json', 'backups/manifest.json',
+                   'versions/example/manifest.json', 'versions/.copy.partial/unlisted-file',
                    '.venv/bin/python', 'public_frontend/node_modules/example/index.js', '__pycache__/app.pyc']
         code = ['.gitignore', '.dockerignore', 'deploy/Dockerfile', 'deploy/compose.yml',
                 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'public_frontend/dist/lab.html',
@@ -395,13 +443,15 @@ class MaintenanceTests(unittest.TestCase):
         self.web.rename(public)
         versions = self.root / 'versions'
         versions.mkdir()
-        password = 'synthetic-backup-password'
         with self.store.maintenance():
-            first = snapshot(self.store, versions, password)
-            second = snapshot(self.store, versions, password)
+            first = snapshot(self.store, versions)
+            second = snapshot(self.store, versions)
         self.assertNotEqual(first, second)
         bundle = versions / first['version']
-        self.assertEqual({p.name for p in bundle.iterdir()}, {'site.json', 'public.zip', 'database.enc'})
+        self.assertEqual({p.name for p in bundle.iterdir()}, {'site.json', 'public.zip', 'database.zip'})
+        self.assertEqual(bundle.stat().st_mode & 0o777, 0o700)
+        for path in bundle.iterdir():
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         doc = bundle / 'site.json'
         data = json.loads(doc.read_text())
         self.assertEqual(data['content']['publications'][0]['id'], 'paper0')
@@ -410,8 +460,9 @@ class MaintenanceTests(unittest.TestCase):
         self.assertNotIn('content', json.loads((public / 'site.json').read_text()))
         self.assertTrue(backup_state(self.store)['snapshot']['ok'])
         target = Store(self.root / 'target'); target.root.mkdir()
-        pair = (target, bundle / 'public.zip', bundle / 'database.enc', password)
-        rebuild(*pair, document=doc, expected_version=first['version'])
+        pair = (target, bundle / 'public.zip', bundle / 'database.zip')
+        with patch('sys.stdin', None), patch('getpass.getpass', side_effect=AssertionError('不應詢問密碼')):
+            rebuild(*pair, document=doc, expected_version=first['version'])
         with self.assertRaises(ValueError): rebuild(*pair, expected_version=second['version'])
         self.assertEqual(list(target.root.iterdir()), [])
         # 有效的 DB 和 ZIP 配上一份改過的 JSON 也不能切換。
@@ -432,9 +483,19 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(portable.read()['users'], [])
         self.assertEqual([p['id'] for p in portable.read()['publications']], ['paper0', 'paper1', 'paper2'])
         (public / 'assets/logo.svg').unlink()
-        with self.assertRaises(ValueError): snapshot(self.store, versions, password)
+        with self.assertRaises(ValueError): snapshot(self.store, versions)
         self.assertFalse(backup_state(self.store)['snapshot']['ok'])
         self.assertEqual(len(list(versions.iterdir())), 2)
+
+    def test_plain_database_archive_requires_format_marker(self):
+        db = self.root / 'database.zip'
+        with patch('lab_backend.cli.password_prompt', side_effect=AssertionError('不應詢問密碼')):
+            backup(self.store, db)
+        self.assertEqual(read_backup(db), self.store.read(include_audit=True))
+        with zipfile.ZipFile(db, 'a') as archive:
+            archive.comment = b'LABSQL9'
+        with self.assertRaisesRegex(ValueError, '版本'):
+            read_backup(db)
 
     def test_empty_assets_survive_legacy_recovery(self):
         self.store.change(lambda s: s['assets'].clear())
@@ -486,7 +547,7 @@ class MaintenanceTests(unittest.TestCase):
         with self.assertRaises(FileExistsError): restore_static(static, db, target, apply=True)
         before = [p['id'] for p in Store(self.store.root, public=True).read()['publications']]
         self.store.change(lambda s: s['publications'].clear())
-        with patch('lab_backend.cli.getpass.getpass', return_value='synthetic-backup-password'):
+        with patch('sys.stdin', io.StringIO('synthetic-backup-password\n')):
             restore(self.store, db, apply=True)
         self.assertEqual([p['id'] for p in Store(self.store.root, public=True).read()['publications']], before)
 

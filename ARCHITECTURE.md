@@ -17,7 +17,7 @@ Python 3.14／FastAPI／Pydantic／sqlite3，原生HTML／CSS／JavaScript管理
 | lab_backend/auth.py | Argon2、Cookie Session、帳戶及審計；build_user供網頁／CLI共用 |
 | lab_backend/application.py | 兩個API入口、請求邊界、錯誤與健康檢查 |
 | lab_backend/config.py | 環境設定，不在匯入時初始化資料 |
-| lab_backend/cli.py | 空庫初始化、帳戶恢復、CSV、加密備份／恢復 |
+| lab_backend/cli.py | 空庫初始化、帳戶恢復、CSV、資料庫備份／恢復 |
 | scripts/maintenance.py | 公開檔案安裝、固定設定白名單、缺檔、靜態備份／恢復及監測 |
 | scripts/prepare_initial_data.py | 明確將前端首次來源轉成CSV＋公開檔案bundle，不開資料庫 |
 | scripts/sync_contracts.py | 真實路由→OpenAPI→公開前端型別 |
@@ -102,9 +102,9 @@ public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或
 
 `deploy/tls.sh` 使用 Docker lego 的 `shortlived` profile 申請四項識別，IPv4 取自 `/var/lib/lab-tls/ip`。`issue` 處理首次簽發，`renew` 處理線上換證及續期，兩個動作共用同一套設定。SAS 上的 root cron 每 6 小時執行一次 `renew`，剩餘約 72 小時時續簽。上線後，443 只將專用的 `acme-tls/1` 握手分流到 edge 網路的臨時 lego，正常流量由 gateway 官網 TLS listener 處理。管理入口直接處理 TLS。首次上線前才由 lego 綁定 443。工具持鎖核對四項 SAN、信任鏈及配對私鑰，再更新兩處 PEM、平滑重載並檢查八組握手的指紋。安裝失敗時用上一套 PEM 復原。[部署及切換步驟](docs/OPERATIONS.md#site-cutover)
 
-每月快照先記錄靜態檔清單，再在一個 SQLite 交易讀取內容、帳戶和審計。整組備份保存到資料卷外的私人版本目錄，包括可攜出的整站 site.json、完整 database.enc 與 public.zip。只有公開固定設定會由 gateway 提供。恢復先在新卷重建並檢查，部署者明確切換後才重建三個容器；原卷保留供退回。
+每月快照先記錄靜態檔清單，再在一個 SQLite 交易讀取內容、帳戶和審計。整組備份保存到資料卷外的私人版本目錄，包括可攜出的整站 site.json、含五表的 database.zip 與 public.zip。只有公開固定設定會由 gateway 提供。恢復先在新卷重建並檢查，部署者明確切換後才重建三個容器；原卷保留供退回。
 
-DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
+月備份使用含 LABSQL10 格式標記的免密碼 ZIP，資料庫備份含管理帳戶的密碼雜湊。備份放在專案根目錄的 versions/，該目錄限維護 UID 10001 和 root 存取（0700），各次版本為 0700、檔案為 0600。Git 忽略整個目錄，Docker 建置只納入白名單程式。舊 database.enc 仍用原密碼還原。靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 
 /healthz只看程序，/readyz讀內容，皆不經外部代理。tools從固定內網端點監測磁碟、備份失敗／過期／錯配及持續不可用，不依賴公開Host或外部HTTP代理。watch每60秒採樣，無主機排程；同volume備份仍須匯出異地。線上備份和 TLS 續期各用一條 root cron，外部通知與異地傳輸另行配置。操作步驟集中OPERATIONS，狀態只記已執行的檢查。
 

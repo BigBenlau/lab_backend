@@ -183,30 +183,29 @@ def backup_job(store, kind, version):
 
 
 def backup(store, output: Path, version=None):
-    """完整已提交資料的加密備份，成功後留下可監測的版本與指紋。"""
+    """ZIP 為免密碼格式。舊指令使用其他檔名時仍依原約定加密。"""
     with backup_job(store, 'database', version or uuid.uuid4().hex) as record:
-        record.update(_database_backup(store, output))
-    print('已產生加密備份；請異地保存，密碼另行保管。')
+        password = None if output.suffix == '.zip' else password_prompt('備份加密密碼')
+        record.update(write_database_backup(store.read(include_audit=True), output, password))
+    print('已產生資料庫備份，請存於私人異地位置。')
 
 
-def _database_backup(store, output: Path):
-    """讀取同一跨庫交易快照，以 CSV 交換格式加密打包。"""
-    password = password_prompt('備份加密密碼')
-    return write_database_backup(store.read(include_audit=True), output, password)
-
-
-def write_database_backup(state, output, password):
-    """沿用 LABSQL10；排程的 JSON 與加密備份共用呼叫端已讀取的同一快照。"""
+def write_database_backup(state, output, password=None):
+    """兩種封裝共用五表格式。免密碼 ZIP 以註解標記 SQLite 備份版本。"""
     validate_state(state)
     validate_capacity(state)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        if password is None:
+            archive.comment = BACKUP_MAGIC
         for resource, name in FILES.items():
             archive.writestr(name, encode_csv(resource, state[resource]))
         if any(info.file_size > 32 * 1024 * 1024 for info in archive.infolist()) or sum(info.file_size for info in archive.infolist()) > 256 * 1024 * 1024:
             raise ValueError('備份明文超限，請先封存歷史審計')
-    salt = os.urandom(16)
-    payload = BACKUP_MAGIC + salt + backup_key(password, salt).encrypt(buffer.getvalue())
+    payload = buffer.getvalue()
+    if password is not None:
+        salt = os.urandom(16)
+        payload = BACKUP_MAGIC + salt + backup_key(password, salt).encrypt(payload)
     if len(payload) > 256 * 1024 * 1024:
         raise ValueError('備份超限')
     write_new(output, payload)
@@ -214,16 +213,23 @@ def write_database_backup(state, output, password):
     return {'sha256': file_hash(output), 'contentHash': content_hash(state)}
 
 
-def read_backup(path: Path, password: str):
-    """只接受本版加密備份，先驗項目/大小/完整資料，不解壓到磁碟。"""
+def read_backup(path: Path, password: str | None = None):
+    """只有舊加密封裝才讀取密碼；兩種格式都先驗版本、大小、五張表及關聯。"""
     if path.is_symlink() or path.stat().st_size > 256 * 1024 * 1024:
         raise ValueError('備份檔案不合法/過大')
     raw = path.read_bytes()
-    if not raw.startswith(BACKUP_MAGIC):
-        raise ValueError('備份格式不符；此 demo 僅接受本版新備份')
-    offset = len(BACKUP_MAGIC)
-    payload = backup_key(password, raw[offset:offset + 16]).decrypt(raw[offset + 16:])
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+    encrypted = raw.startswith(BACKUP_MAGIC)
+    if encrypted:
+        if password is None:
+            password = (getpass.getpass('舊備份密碼: ') if sys.stdin.isatty()
+                        else sys.stdin.readline(512).rstrip('\r\n'))
+        offset = len(BACKUP_MAGIC)
+        raw = backup_key(password, raw[offset:offset + 16]).decrypt(raw[offset + 16:])
+    elif path.suffix != '.zip' or not raw.startswith(b'PK\x03\x04'):
+        raise ValueError('備份格式不符')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        if not encrypted and archive.comment != BACKUP_MAGIC:
+            raise ValueError('資料庫備份版本不符')
         infos = archive.infolist()
         expected = set(FILES.values())
         if len(infos) != len(expected) or set(archive.namelist()) != expected:
@@ -238,8 +244,7 @@ def read_backup(path: Path, password: str):
 
 def restore(store, path: Path, apply=False):
     """先預覽驗證，明確套用才替換資料並撤銷舊登入版本。"""
-    password = getpass.getpass('備份密碼: ')
-    state = read_backup(path, password)
+    state = read_backup(path)
     for user in state['users']:
         user['authVersion'] += 1
         user['version'] += 1
@@ -277,7 +282,7 @@ def main():
     imp.add_argument('directory', type=Path)
     imp.add_argument('--apply', action='store_true')
     bak = sub.add_parser('backup')
-    bak.add_argument('file', type=Path)
+    bak.add_argument('file', type=Path, help='免密碼備份請使用 .zip；.enc 沿用加密模式')
     bak.add_argument('--version', help='本次資料庫與靜態檔共用的備份版本')
     res = sub.add_parser('restore')
     res.add_argument('file', type=Path)

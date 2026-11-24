@@ -34,6 +34,7 @@ backup-password
 # 執行庫及journal、離線交換與備份，不加入程式版本。
 storage/
 backups/
+/versions/
 imports/
 exports/
 *.db
