@@ -39,7 +39,10 @@ export function pageData(base, page, id, payload) {
     const portraitAssetId = row.portrait ? 'api:portrait:' + row.id : null;
     if (row.portrait) assets.push({...row.portrait.metadata, id: portraitAssetId, url: row.portrait.url});
     const englishName = row.englishName?.trim();
+    // 使用者指定的校友稱謂僅用於前端展示，不修改原始成員資料。
+    const alumniName = state === 'alumni' ? [englishName, row.givenName, row.name].join(' ').match(/\b(molly|brian)\b/i)?.[1].toLowerCase() : '';
     return {...row, state, portraitAssetId,
+      title: ({molly: 'PhD', brian: 'Master'})[alumniName] || row.title,
       name: englishName && !row.name.toLowerCase().includes(englishName.toLowerCase()) ? row.name + ' (' + englishName + ')' : row.name,
       interests: row.interests ?? [], links: row.links ?? [],
     };
