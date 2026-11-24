@@ -105,24 +105,31 @@ test('照片metadata與署名跳脫；不需全體成員即可生成作者連結
   }
 });
 
-test('個人頁與列表維持論文入庫倒序，old選項只反轉順序', async () => {
+test('個人頁與單頁列表維持API論文順序，全部展示且沒有篩選或分頁', async () => {
   const {pageData} = await api, {render, element} = await renderers();
-  const papers = [paper('new', 2020), paper('old', 2026)];
+  const papers = [paper('new', 2020), ...Array.from({length: 12}, (_, i) => paper('middle-' + i)), paper('old', 2026)];
   const detail = pageData(base(), 'member', 'amy', {person: person(), publications: papers});
-  assert.deepEqual(detail.publications.map(p => p.id), ['new', 'old']);
+  assert.deepEqual(detail.publications.map(p => p.id), papers.map(p => p.id));
   render.setData(detail); render.people('amy');
   const html = element('#content').innerHTML;
   assert.ok(html.indexOf('>new</a>') < html.indexOf('>old</a>'));
   render.setData(pageData(base(), 'publications', undefined, papers));
-  render.publications(undefined, new URLSearchParams());
-  let list = element('#paper-results').innerHTML;
-  assert.ok(list.indexOf('>new</a>') < list.indexOf('>old</a>'));
-  render.publications(undefined, new URLSearchParams('sort=old'));
-  list = element('#paper-results').innerHTML;
-  assert.ok(list.indexOf('>old</a>') < list.indexOf('>new</a>'));
+  render.publications();
+  const list = element('#content').innerHTML;
+  assert.equal((list.match(/<article class="paper">/g) || []).length, papers.length);
+  assert.deepEqual([...list.matchAll(/<h3><a href="#publications\/([^"]+)"/g)].map(match => match[1]), papers.map(p => p.id));
+  assert.match(list, /id="paper-count"[^>]*>14 publications<\/span>/);
+  assert.match(list, /href="#member\/amy"[^>]*>Exact signature<\/a>/);
+  assert.doesNotMatch(list, /class="toolbar"|id="(?:paper-year|paper-type|paper-sort|clear-filters|pagination)"|data-page=|data-reset-papers/);
+  render.setData(pageData(base(), 'publications', undefined, [paper('single')])); render.publications();
+  assert.match(element('#content').innerHTML, /id="paper-count"[^>]*>1 publication<\/span>/);
+  render.setData(pageData(base(), 'publications', undefined, [])); render.publications();
+  const empty = element('#content').innerHTML;
+  assert.match(empty, /0 publications/); assert.match(empty, /No publications listed yet\./);
+  assert.doesNotMatch(empty, /filters|class="paper"|id="pagination"|data-page=/);
 });
 
-test('首頁顯示全部合照和API前三篇，英文名可空且不改作者署名', async () => {
+test('首頁保留全部合照且不顯示近期論文，英文名可空且不改作者署名', async () => {
   const {pageData} = await api, {render, element} = await renderers();
   render.setData(pageData(base(), 'home', undefined, {
     assets: [{id: 'a', url: '/assets/合照.jpg', metadata: {alt: 'Group A'}}, {id: 'b', url: '/assets/b.jpg', metadata: {alt: 'Group B'}}],
@@ -130,8 +137,9 @@ test('首頁顯示全部合照和API前三篇，英文名可空且不改作者�
   }));
   render.home(); const html = element('#content').innerHTML;
   assert.match(html, /\/assets\/合照.jpg/); assert.match(html, /\/assets\/b.jpg/);
-  assert.match(html, /1 \/ 2/); assert.match(html, /View all 55 publications/);
-  assert.ok(html.indexOf('>third</a>') < html.indexOf('>second</a>'));
+  assert.match(html, /1 \/ 2/);
+  assert.doesNotMatch(html, /hm-stories|FROM THE LAB|Recent publications/);
+  assert.doesNotMatch(html, /View all 55 publications|>third<\/a>|>second<\/a>|>first<\/a>/);
   for (const englishName of ['Avery', null, '', '   ']) {
     const data = pageData(base(), 'member', undefined, [person({englishName})]); render.setData(data);
     assert.equal(data.people[0].name, englishName === 'Avery' ? 'An Example (Avery)' : 'An Example');
@@ -147,6 +155,7 @@ test('校友年月在列表和個人頁一致；空身份不誤判校友；保�
   assert.deepEqual(data.people.map(p => p.state), ['alumni', 'unclassified']);
   assert.deepEqual(data.people.map(p => p.id), ['amy', 'new-person']);
   render.people(); assert.match(element('#content').innerHTML, /datetime="2025-06">June 2025/);
+  assert.match(element('#content').innerHTML, /<p class="eyebrow">Synthetic<\/p><h1>Members<\/h1>/);
   assert.match(element('#content').innerHTML, /Other members/);
   render.setData(pageData(base(), 'member', 'amy', {person: alum, publications: []}));
   render.people('amy'); assert.match(element('#content').innerHTML, /datetime="2025-06">June 2025/);

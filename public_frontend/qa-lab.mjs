@@ -11,7 +11,7 @@ assert.equal(siteSettings.name, 'Synthetic Lab', '請使用名為 Synthetic Lab 
 const [home, people, papers] = await Promise.all(['/api/home','/api/people','/api/publications'].map(read));
 const albumSize = home.assets.length;
 const member = people.find(p => papers.some(paper => paper.authors.some(a => a.personId === p.id)));
-assert(albumSize >= 2 && member && papers.length > 12, '此瀏覽器案例需要多圖、具論文的成員及第二頁論文');
+assert(albumSize >= 2 && member && papers.length > 12, '此瀏覽器案例需要多圖、具論文的成員及超過十二篇論文');
 const detail = await read('/api/people/' + encodeURIComponent(member.id));
 assert(detail.publications.length > 0, '成員資料應回傳關聯論文');
 const memberRoute = 'member/' + encodeURIComponent(member.id);
@@ -48,16 +48,14 @@ await check("!document.querySelector('.hm-research') && !document.querySelector(
 assert.equal(await evaluate("document.querySelector('.lab-full-name').textContent"), siteSettings.fullName);
 assert.equal(await evaluate("document.querySelector('.footer-name').textContent"), siteSettings.fullName);
 assert.equal(await evaluate("document.querySelector('.recruiting-call a').getAttribute('href')"), siteSettings.recruitmentUrl || '#contact');
-const setFont=font=>evaluate(`(()=>{const s=document.querySelector('#font-preview');s.value=${JSON.stringify(font)};s.dispatchEvent(new Event('change'));})()`);
-for(const [font,family] of [['times','Times New Roman'],['arial','Arial']]){
-  await setFont(font);
-  for(const page of ['home','member',memberRoute,'publications','news','contact']){
-    await navigate(page);
-    await check(`[...document.querySelectorAll('body *')].every(el=>getComputedStyle(el).fontFamily.includes(${JSON.stringify(family)})) && document.documentElement.scrollWidth<=innerWidth`,font+' throughout '+page);
-  }
+await check("!document.querySelector('#font-preview') && !document.querySelector('#navigation a[href=\"#contact\"]') && !document.querySelector('.footer-bottom')",'font switcher, top Contact and footer Research group removed');
+for(const page of ['home','member',memberRoute,'publications','news','contact']){
+  await navigate(page);
+  await check("[...document.querySelectorAll('body *')].every(el=>getComputedStyle(el).fontFamily.includes('Times New Roman')) && document.documentElement.scrollWidth<=innerWidth",'Times throughout '+page);
+  if(['member','publications','news','contact'].includes(page))await check(`document.querySelector('.page-heading .eyebrow')?.textContent===${JSON.stringify(siteSettings.name.replace(/\s+Lab$/i,''))}`,'brand without Lab above subpage title '+page);
 }
 await navigate('home');
-await check("Math.abs(document.querySelector('.hm-story-list').getBoundingClientRect().left-document.querySelector('.hm-stories-title').getBoundingClientRect().left)<2 && document.querySelector('.hm-story-list').getBoundingClientRect().top>=document.querySelector('.hm-stories-title').getBoundingClientRect().bottom",'recent papers below heading without empty left column');
+await check("!document.querySelector('.hm-stories')",'homepage recent publications section removed');
 await check("document.querySelector('.hm-copy').getBoundingClientRect().top<document.querySelector('.hm-gallery').getBoundingClientRect().top+20 && [...document.querySelectorAll('.stack-sheet')].every(el=>{const m=new DOMMatrix(getComputedStyle(el).transform);return Math.abs(Math.atan2(m.b,m.a)*180/Math.PI)<3;})",'top-aligned hero and subtle photo angles');
 await evaluate('window.scrollTo(0,700)');await settle();
 await check("Math.abs(document.querySelector('.site-header').getBoundingClientRect().top)<1",'navigation remains visible while scrolling');
@@ -96,20 +94,17 @@ await check(`document.querySelectorAll('.member-papers .paper').length===${detai
 await evaluate("document.querySelector('.member-papers .paper h3 a').click()");await settle();
 await check("location.hash.startsWith('#publications/')",'member paper opens detail page');
 await evaluate('history.back()');await ready();assert.equal(await evaluate("document.querySelector('h1').textContent"),displayName(member));
-await navigate('publications');await check(`document.querySelector('#paper-count').textContent==='${papers.length} results' && document.querySelectorAll('.paper').length===12`,'publication count and pagination');
+await navigate('publications');await check(`document.querySelector('#paper-count').textContent==='${papers.length} publications' && document.querySelectorAll('.paper').length===${papers.length}`,'all publications on one page');
 await check("!document.querySelector('.page-heading p:not(.eyebrow)')",'publications heading');
-await evaluate("document.querySelector('[data-page=\"2\"]').click()");await check(`document.querySelector('#pagination').textContent.includes('Page 2 of ${Math.ceil(papers.length/12)}')`,'publication next page');
-const {year,type}=papers[0];
-await evaluate(`for (const [id,value] of ${JSON.stringify([['paper-year',String(year)],['paper-type',type]])}) { const field=document.getElementById(id); field.value=value; field.dispatchEvent(new Event('change')); }`);
-const expected=papers.filter(p=>p.year===year && p.type===type).length;
-await check(`document.querySelectorAll('.paper').length===${Math.min(expected,12)}`,'combined year and type filters');
-await navigate('publications');
+await check("!document.querySelector('.toolbar, #clear-filters, #pagination, [data-page], [data-reset-papers]')",'publication filters and pagination removed');
+assert.deepEqual(await evaluate("[...document.querySelectorAll('#paper-results .paper h3 a')].map(a=>a.textContent)"),papers.map(p=>p.title));
+await check("!!document.querySelector('#paper-results .author-link[href^=\"#member/\"]')",'publication author links');
 await check("!document.querySelector('[data-citation]')&&!document.querySelector('[data-abstract]')",'no fabricated citation or abstract actions');
 const firstTitle=await evaluate("document.querySelector('.paper h3 a').textContent");
 await evaluate("document.querySelector('.paper h3 a').click()");await settle();assert.equal(await evaluate("document.querySelector('h1').textContent"),firstTitle);
 await navigate('contact');await evaluate("document.querySelector('.join-grid details')?.setAttribute('open','')");
 await check("!document.querySelector('input[type=checkbox]') && [...document.querySelectorAll('.application-materials')].every(list=>list.children.length>0)",'application materials lists');
-await check("getComputedStyle(document.querySelector('#navigation .join-link'),'::after').content==='none'",'Contact active state without underline');
+await check("!document.querySelector('#navigation a[href=\"#contact\"]')",'Contact removed from navigation');
 assert.equal(await evaluate("document.querySelector('.join-grid aside h2').textContent"),siteSettings.contactName || siteSettings.name);
 for(const width of [390,768]){
   await send('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:true});

@@ -25,11 +25,7 @@ html{scroll-padding-top:140px}.site-header{position:sticky;top:0;z-index:40;box-
 @media(max-width:600px){.gallery-arrow{width:44px;height:44px}.gallery-arrow svg{width:22px;height:22px}.gallery-prev{left:-3px}.gallery-next{right:5px}}
 @media(prefers-reduced-motion:reduce){.stack-sheet{transition:none}}
 
-/* Preview one font family across the entire lab site, including controls. */
-:root{--site-font:Arial,Helvetica,sans-serif}
-:root[data-font=times]{--site-font:"Times New Roman",Times,serif}
-:root *{font-family:var(--site-font)!important}
-#font-preview{width:auto;min-width:0;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:var(--white);color:var(--ink);font-size:16px}
+/* Use Times throughout the lab site, including controls. */
+:root,:root *{font-family:"Times New Roman",Times,serif!important}
 .hm-about .recruiting-call{margin-top:18px}
-@media(max-width:900px){#font-preview{align-self:flex-start;margin:6px 10px}}
 #alumni-heading{margin-bottom:22px}
