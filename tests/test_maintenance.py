@@ -35,7 +35,11 @@ class GatewaySettingsTests(unittest.TestCase):
                               .replace('/tmp/', str(self.root) + '/'))
         # 替身只記錄呼叫及模擬設定檢查失敗，不開socket、不解析真實憑證。
         for name, body in {
-            'envsubst': r"""sed -e 's|${PUBLIC_LISTEN_PORT}|'"$PUBLIC_LISTEN_PORT"'|g' -e 's|${ACME_STREAM_INCLUDE}|'"$ACME_STREAM_INCLUDE"'|g'""",
+            'envsubst': r"""sed -e 's|${PUBLIC_LISTEN_PORT}|'"$PUBLIC_LISTEN_PORT"'|g' -e 's|${ACME_STREAM_INCLUDE}|'"$ACME_STREAM_INCLUDE"'|g' -e 's|${HTTPS_REDIRECT_INCLUDE}|'"$HTTPS_REDIRECT_INCLUDE"'|g'""",
+            'openssl': 'case "$3" in\n'
+                       '/run/public-tls/cert.pem) echo "$GATEWAY_PUBLIC_SAN" ;;\n'
+                       '/run/tls/cert.pem) echo "DNS:ye.wang, IP Address:203.0.113.20" ;;\n'
+                       '*) exit 1 ;;\nesac\nexit "${CERT_EXIT:-0}"',
             'nginx': 'printf "%s\\n" "$*" >> "$GATEWAY_CALLS"\n'
                      'if [ "$1" = "-t" ]; then exit "${GATEWAY_CHECK_EXIT:-0}"; fi',
         }.items():
@@ -44,12 +48,14 @@ class GatewaySettingsTests(unittest.TestCase):
             path.chmod(0o700)
         self.env = {**os.environ, 'PATH': str(self.root) + os.pathsep + os.environ['PATH'],
                     'LAB_HTTP_TEST': 'false',
+                    'GATEWAY_PUBLIC_SAN': 'DNS:casino.ye.wang, DNS:crab.ye.wang, DNS:ye.wang, IP Address:203.0.113.10, '
+                                          'DNS:unlisted.example, DNS:*.ye.wang, IP Address:2001:db8::1',
                     'GATEWAY_CALLS': str(self.root / 'calls')}
 
-    def run_entry(self, **changes):
+    def run_entry(self, *args, **changes):
         """每次獨立啟動並捕捉退出碼，不讓被拒的設定污染真實檔案。"""
         (self.root / 'calls').unlink(missing_ok=True)
-        return subprocess.run(['sh', str(self.entry)], env={**self.env, **changes},
+        return subprocess.run(['sh', str(self.entry), *args], env={**self.env, **changes},
                               text=True, capture_output=True, timeout=5)
 
     def test_fixed_https_ports_and_separate_certificate_paths(self):
@@ -62,6 +68,7 @@ class GatewaySettingsTests(unittest.TestCase):
         self.assertTrue(calls[1].endswith('-g daemon off;'))
         config = (self.root / 'nginx.conf').read_text()
         self.assertIn('include /etc/lab/acme-stream.conf;', config)
+        self.assertIn('include /etc/lab/https-redirect.conf;', config)
         self.assertIn('8444 "default-src', config)
         for name, port, tls_path in (('admin', '27182', '/run/tls'), ('public', '127.0.0.1:8444 proxy_protocol', '/run/public-tls')):
             transport = (self.root / f'{name}-transport.conf').read_text()
@@ -73,15 +80,30 @@ class GatewaySettingsTests(unittest.TestCase):
             suffix = ':27182' if name == 'admin' else ''
             self.assertIn('error_page 497 = @https_navigation;', transport)
             self.assertIn('if ($request_method !~ ^(GET|HEAD)$) { return 400; }', transport)
-            self.assertIn('if ($redirect_host = "") { return 400; }', transport)
-            self.assertIn(f'return 302 https://$redirect_host{suffix}$request_uri;', transport)
+            self.assertIn(f'if (${name}_redirect_host = "") {{ return 400; }}', transport)
+            self.assertIn(f'return 302 https://${name}_redirect_host{suffix}$request_uri;', transport)
+
+    def test_production_redirects_use_only_installed_certificate_names(self):
+        result = self.run_entry('check-config')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len((self.root / 'calls').read_text().splitlines()), 1)
+        public = self.root / 'public-names.map'
+        names = ['casino.ye.wang', 'crab.ye.wang', 'ye.wang', '203.0.113.10']
+        self.assertEqual(public.read_text().splitlines(), [f'{name} {name};' for name in names])
+        self.assertEqual((self.root / 'admin-names.map').read_text(), 'ye.wang ye.wang;\n203.0.113.20 203.0.113.20;\n')
+        # 憑證的 IP 改變或回復時，更新映射即可，不啟動另一個 Nginx。
+        self.assertEqual(self.run_entry('refresh-redirects', GATEWAY_PUBLIC_SAN='IP Address:203.0.113.21').returncode, 0)
+        self.assertEqual(public.read_text(), '203.0.113.21 203.0.113.21;\n')
+        self.assertFalse((self.root / 'calls').exists())
+        self.assertNotEqual(self.run_entry('refresh-redirects', CERT_EXIT='1').returncode, 0)
 
     def test_http_needs_no_certificate_and_switching_back_restores_tls(self):
         """HTTP移除兩組憑證，管理端內外27181一致；切回後恢復TLS。"""
-        result = self.run_entry(LAB_HTTP_TEST='true')
+        result = self.run_entry(LAB_HTTP_TEST='true', CERT_EXIT='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         config = (self.root / 'nginx.conf').read_text()
         self.assertNotIn('acme-stream.conf', config)
+        self.assertNotIn('https-redirect.conf', config)
         self.assertIn('8080 "default-src', config)
         for name, port in (('admin', 27181), ('public', 8080)):
             self.assertEqual((self.root / f'{name}-transport.conf').read_text(), f'listen {port} default_server;\n')
@@ -145,7 +167,7 @@ class DeploymentFilesTests(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines()[-3:], ['build', '--pull', 'public-api'])
 
     def test_complete_code_without_initial_data_builds_and_empty_ignore_is_rejected(self):
-        for name in ('deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/gateway-entrypoint.sh',
+        for name in ('deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh',
                      'admin_frontend/admin/index.html', 'admin_frontend/admin/app.js', 'admin_frontend/admin/style.css',
                      'public_frontend/dist/lab.html', 'public_frontend/dist/lab.js', 'public_frontend/dist/api.js',
                      'public_frontend/dist/lab.css', 'public_frontend/dist/gold.css'):

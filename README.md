@@ -14,7 +14,7 @@
 
 ## 結構
 
-`lab_backend/`包含八個Python功能模組；`admin_frontend/admin/`為管理頁，`public_frontend/`為官網程式。`deploy/`提供gateway、public-api、admin-api三個常駐容器：共用Nginx提供官網443、管理頁27182及各自API代理，兩API保留獨立內網與資料權限，無主機端口。管理來源由Cloud防火牆限制，後台以帳密登入。部署採固定預設值，不需.env或指定ADMIN_HOST。
+`lab_backend/`包含八個Python功能模組，`admin_frontend/admin/`為管理頁，`public_frontend/`為官網程式。`deploy/`提供gateway、public-api、admin-api三個常駐容器。共用Nginx將官網HTTP 80轉至HTTPS 443，並在27182提供管理頁。兩個API各自使用獨立內網與資料權限。管理來源由雲端防火牆限制，後台以帳密登入。部署採固定預設值，不需.env或指定ADMIN_HOST。
 
 SQLite保存在一個Docker named volume中：內容庫content.db保存assets、people、publications；管理庫admin.db保存users、audit，共5表47欄。公開API為4個GET，管理／登入為14個操作模板，按資源展開22個操作。
 

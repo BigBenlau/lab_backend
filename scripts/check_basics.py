@@ -126,7 +126,7 @@ assert not set(services['public-api']['networks']) & set(services['admin-api']['
 assert set(services['public-api']['networks']) == {'frontend_net'}
 assert set(services['admin-api']['networks']) == {'admin_net'}
 assert set(services['gateway']['networks']) == {'edge', 'frontend_net', 'admin_net'}
-assert services['gateway']['ports'] == ['0.0.0.0:443:8443', '0.0.0.0:27182:27182']
+assert services['gateway']['ports'] == ['0.0.0.0:80:8080', '0.0.0.0:443:8443', '0.0.0.0:27182:27182']
 assert 'LAB_ADMIN_ORIGIN' not in str(services) and 'ADMIN_HOST' not in str(services)
 assert not services['gateway'].get('depends_on')
 assert compose['networks']['frontend_net']['internal'] is True
@@ -138,6 +138,14 @@ assert 'admin-api' not in common + proxy and '/srv/admin' not in proxy
 assert 'lab-public-api' not in admin_proxy and '/srv/public' not in admin_proxy
 assert 'include /tmp/public-transport.conf;' in proxy
 assert 'include /tmp/admin-transport.conf;' in admin_proxy
+assert '${HTTPS_REDIRECT_INCLUDE}' in common
+redirect = (ROOT / 'deploy/https-redirect.conf').read_text()
+assert 'listen 8080 default_server;' in redirect and 'return 301 https://$public_redirect_host$request_uri;' in redirect
+assert 'if ($request_method !~ ^(GET|HEAD)$) { return 400; }' in redirect
+assert 'if ($public_redirect_host = "") { return 400; }' in redirect
+for side in ('public', 'admin'):
+    assert f'map $host ${side}_redirect_host {{\n    default "";\n    include /tmp/{side}-names.map;' in redirect
+assert not re.search(r'^\s*(proxy_pass|root|alias|try_files|ssl_certificate)\b', redirect, re.M)
 assert 'resolver 127.0.0.11' in nginx and 'proxy_pass http://$admin_upstream' in nginx
 assert 'X-Real-IP $remote_addr' in nginx
 assert 'map $scheme $hsts { https "max-age=31536000"; default ""; }' in nginx
@@ -233,7 +241,7 @@ for config in (common,):
 build_ignore = [line for line in (ROOT / '.dockerignore').read_text().splitlines() if line and not line.startswith('#')]
 build_dirs = {'lab_backend', 'scripts', 'admin_frontend', 'admin_frontend/admin', 'deploy',
               'public_frontend', 'public_frontend/dist'}
-build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py', 'deploy/acme-stream.conf',
+build_files = {'requirements.lock', 'scripts/maintenance.py', 'scripts/prepare_initial_data.py', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf',
                'deploy/Dockerfile', 'deploy/Dockerfile.gateway', 'deploy/nginx.conf.template', 'deploy/gateway-entrypoint.sh'}
 build_files.update(str(path.relative_to(ROOT)) for path in (ROOT / 'lab_backend').glob('*.py'))
 build_files.update('admin_frontend/admin/' + name for name in ('index.html', 'app.js', 'style.css'))
@@ -255,7 +263,7 @@ for directory in ('public_frontend', 'deploy', 'admin_frontend', 'lab_backend', 
 gateway_docker = (ROOT / 'deploy/Dockerfile.gateway').read_text()
 # 合併映像只複製兩個前端程式及入口設定，仍不能帶入Python、初始化來源或憑證。
 gateway_sources = {source for line in gateway_docker.splitlines() if line.startswith('COPY ') for source in line.split()[1:-1]}
-assert gateway_sources == {'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/gateway-entrypoint.sh'} | {
+assert gateway_sources == {'admin_frontend/admin', 'deploy/nginx.conf.template', 'deploy/acme-stream.conf', 'deploy/https-redirect.conf', 'deploy/gateway-entrypoint.sh'} | {
     'public_frontend/dist/' + name for name in ('lab.html', 'lab.js', 'api.js', 'lab.css', 'gold.css')}
 for old_file in ('Dockerfile', 'nginx.conf', 'nginx-http.conf', 'nginx-https.conf'):
     assert not (ROOT / 'public_frontend' / old_file).exists(), '舊版部署入口不再維護'

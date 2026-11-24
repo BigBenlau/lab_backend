@@ -1,9 +1,12 @@
 FROM nginx:1.30.6-alpine
+# 啟動與換證時只讀公開憑證的 SAN，據此產生 HTTP 導航允許的目的地。
+RUN apk add --no-cache openssl
 COPY admin_frontend/admin /srv/admin
 COPY public_frontend/dist/lab.html /srv/code/index.html
 COPY public_frontend/dist/lab.js public_frontend/dist/api.js public_frontend/dist/lab.css public_frontend/dist/gold.css /srv/code/
 COPY deploy/nginx.conf.template /etc/lab/nginx.conf.template
 COPY deploy/acme-stream.conf /etc/lab/acme-stream.conf
+COPY deploy/https-redirect.conf /etc/lab/https-redirect.conf
 COPY deploy/gateway-entrypoint.sh /etc/lab/entrypoint.sh
 # 程式與設定保留root擁有、讓執行帳戶可讀；腳本由/bin/sh讀取，不需執行位元。
 RUN chmod 0755 /srv /etc/nginx \

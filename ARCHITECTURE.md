@@ -61,7 +61,7 @@ SQLite是業務內容唯一執行來源，每次API請求開新快照，只讀�
 
 ```mermaid
 flowchart LR
-  B[公開瀏覽器] -->|HTTPS 443／測試HTTP 80| G[gateway 共用Nginx]
+  B[公開瀏覽器] -->|正式 80 轉 443／測試 80| G[gateway 共用Nginx]
   A[管理瀏覽器] -->|HTTPS 27182／測試HTTP 27181| W[Cloud來源IP限制]
   W --> G
   G -->|四個GET／frontend_net| P[public-api]
@@ -82,7 +82,7 @@ flowchart LR
 
 公開及管理入口使用不同listener與靜態根目錄：公開只代理固定四個GET到public-api，清除Cookie／Authorization、隱藏Set-Cookie，其他API及未知檔案路徑404；管理只代理auth/admin到admin-api，保留Cookie與CSRF。不能以公開端口、更換Host或改URL繞到管理路由。兩套請求限流、body限制及CSP各自保留，標頭不因Nginx的server繼承而互相污染。共用入口是明確的部署取捨：共用 Nginx 程序及站點私鑰，兩個入口有共同的故障與金鑰暴露風險，入口重啟同時影響官網與管理頁；兩個API的程序、網路及資料權限隔離仍保留，不能宣稱與兩個獨立Nginx完全等同。
 
-不依賴.env、ADMIN_HOST或LAB_ADMIN_ORIGIN。lab.sh固定Compose專案名lab-backend並以--env-file /dev/null忽略舊.env，volume名與使用者現有部署相同，公開網路固定lab-content。HTTP明確用lab.sh http，其他命令預設HTTPS；不自動選端口或終止主機服務。HTTP映射80→8080與27181→27181；HTTPS映射443→8443與27182→27182。官網容器端口避開特權端口，管理端口內外相同；模式、Compose映射與Nginx生成片段由檢查共同核對。
+lab.sh 固定 Compose 專案名 lab-backend，使用 --env-file /dev/null，沿用既有 volume 與 lab-content 網路。正式 gateway 的 80→8080 只回應轉址，443→8443 提供官網，27182→27182 提供管理頁。顯式使用 `lab.sh http` 時，80→8080 直接提供測試官網，27181→27181 提供測試管理頁。管理端口內外相同，官網容器使用非特權端口。兩種模式均無需設定 .env、ADMIN_HOST 或 LAB_ADMIN_ORIGIN。
 
 管理入口取消固定Host白名單，可用實際IPv4或域名訪問，不再因ADMIN_HOST不符直接關閉連線。帳密與來源限制仍有效：每個非GET請求的Origin須等於部署模式的協定加實際Host（包含端口），拒絕缺少Origin、跨域、錯協定或錯端口；不信任X-Forwarded-Host／Proto或任意客戶端轉發IP。除登入外，寫入另需Session內的CSRF token。這是同源驗證，不是預先核准域名；任何解析至VPS的域名可打開登入頁，來源存取由Cloud控制，HTTPS瀏覽器仍須驗證憑證域名。
 
@@ -92,13 +92,15 @@ public匿名唯讀、admin登入可寫，無MD5、預設帳密、匿名註冊或
 
 所有容器非root、唯讀rootfs、cap_drop=ALL、no-new-privileges並限制資源。gateway只在/tmp存設定與暫存，映像內自有程式／設定root擁有、目錄0755與檔案0644，切換USER10001後檢查可讀性；不改主機來源、TLS或volume權限。不以root執行或chmod777排錯。gateway建置只複製管理三檔、官網五檔及部署設定，不帶來源JSON、assets或私人資料；固定site.json及實體圖檔／PDF來自volume。
 
-全專案只維護根.gitignore與.dockerignore。兩個映像共用根context、預設排除全部再逐檔放行程式，新增建置依賴須同步白名單。原始來源只在seed時唯讀掛載，不經builder；舊.env仍忽略且不自動刪除。沒有獨立DB容器，不在啟動時自動初始化或重建；不刪volume或journal排錯。單台Linux本機檔案系統，VPS只需Docker／Compose與可用維護控制台，不安裝主機Python或systemd排程；SSH關閉前須確認救援入口。
+全專案只維護根.gitignore與.dockerignore。兩個映像共用根context、預設排除全部再逐檔放行程式，新增建置依賴須同步白名單。原始來源只在seed時唯讀掛載，不經builder；舊.env仍忽略且不自動刪除。沒有獨立DB容器，不在啟動時自動初始化或重建；不刪volume或journal排錯。單台Linux本機檔案系統，VPS 使用 Docker／Compose、Ubuntu cron 與維護控制台，不安裝主機Python或systemd排程；SSH關閉前須確認救援入口。
 
 來源IP僅由Cloud防火牆／安全組管理，程式無IP清單。部署前限制管理端口、確認規則套用實際VPS／網卡；非標準端口不能取代登入或防火牆。僅IPv4直接連VPS，不經CDN或額外代理、不配置AAAA；驗證允許與不允許的來源，不能只看UFW。
 
 正式 HTTPS 用同一張短效憑證涵蓋三個 DNS 識別（`casino.ye.wang`、`crab.ye.wang`、`ye.wang`）及一個 IP 識別（SAS 公網 IPv4）。官網在 443、管理頁在 27182，各自呈現相同憑證。完整鏈及私鑰安裝到 secrets/public-tls 與 secrets/tls，兩處均唯讀掛載至 gateway。Cookie 可跨同主機端口，公開代理清除 Cookie，管理寫入仍檢查含端口的 Origin 及 CSRF。憑證私鑰、Cookie、執行庫／journal、匯出及備份須留在私人儲存。
 
-`deploy/tls.sh` 使用 Docker lego 的 `shortlived` profile 申請四項識別，IPv4 取自 `/var/lib/lab-tls/ip`。`issue` 處理首次簽發，`renew` 處理線上換證及續期，兩個動作共用同一套設定。B 只啟用一個 OOS 或 cron 任務，每 6 小時檢查，剩餘約 72 小時時續簽。上線後，443 只將專用的 `acme-tls/1` 握手分流到 edge 網路的臨時 lego，正常流量由 gateway 官網 TLS listener 處理。管理入口直接處理 TLS。首次上線前才由 lego 綁定 443。工具持鎖核對四項 SAN、信任鏈及配對私鑰，再更新兩處 PEM、平滑重載並檢查八組握手的指紋。安裝失敗時用上一套 PEM 復原。[部署及切換步驟](docs/OPERATIONS.md#site-cutover)
+正式模式在啟動、換證及還原憑證時，從各入口的公開憑證取得允許轉址的網站域名及 IPv4。已知主機上的明文 GET／HEAD 在 80 回應 301 到同一主機的 443，在 443 或 27182 誤用明文則回應 302 到原 HTTPS 入口。兩者均保留路徑與查詢字串。未知主機和明文寫入回應 400。測試模式直接提供明文內容，無需憑證或轉址設定。
+
+`deploy/tls.sh` 使用 Docker lego 的 `shortlived` profile 申請四項識別，IPv4 取自 `/var/lib/lab-tls/ip`。`issue` 處理首次簽發，`renew` 處理線上換證及續期，兩個動作共用同一套設定。SAS 上的 root cron 每 6 小時執行一次 `renew`，剩餘約 72 小時時續簽。上線後，443 只將專用的 `acme-tls/1` 握手分流到 edge 網路的臨時 lego，正常流量由 gateway 官網 TLS listener 處理。管理入口直接處理 TLS。首次上線前才由 lego 綁定 443。工具持鎖核對四項 SAN、信任鏈及配對私鑰，再更新兩處 PEM、平滑重載並檢查八組握手的指紋。安裝失敗時用上一套 PEM 復原。[部署及切換步驟](docs/OPERATIONS.md#site-cutover)
 
 DB備份加密，靜態備份含assets與白名單site.json，以版本、DB SHA256與逐檔SHA256配對，拒絕穿越及符號連結並限制大小。這是完整性核對而非數位簽章；外部URL不連外下載。公開檔案僅SVG／PNG／JPEG／WebP／PDF，固定設定上限1MiB；首次安裝拒絕覆寫。CSV與靜態安裝是分開步驟，不宣稱跨DB／檔案原子提交；更換整個public目錄後force-recreate gateway以重新掛載subpath。
 

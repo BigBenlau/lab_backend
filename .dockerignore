@@ -34,6 +34,7 @@ deploy/**
 !deploy/Dockerfile.gateway
 !deploy/nginx.conf.template
 !deploy/acme-stream.conf
+!deploy/https-redirect.conf
 !deploy/gateway-entrypoint.sh
 
 # 共用gateway只加入官網五個頁面檔案；資料及資產由volume管理。

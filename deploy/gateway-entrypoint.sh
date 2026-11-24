@@ -6,12 +6,22 @@ case "${LAB_HTTP_TEST:-false}" in
     false)
         admin_port=27182; PUBLIC_LISTEN_PORT=8444; tls_suffix=' ssl'
         public_listener="127.0.0.1:$PUBLIC_LISTEN_PORT proxy_protocol"
-        ACME_STREAM_INCLUDE='include /etc/lab/acme-stream.conf;' ;;
+        ACME_STREAM_INCLUDE='include /etc/lab/acme-stream.conf;'
+        HTTPS_REDIRECT_INCLUDE='include /etc/lab/https-redirect.conf;' ;;
     true)
         admin_port=27181; PUBLIC_LISTEN_PORT=8080; tls_suffix=''
-        public_listener=$PUBLIC_LISTEN_PORT; ACME_STREAM_INCLUDE='' ;;
+        public_listener=$PUBLIC_LISTEN_PORT; ACME_STREAM_INCLUDE=''; HTTPS_REDIRECT_INCLUDE='' ;;
     *) echo 'LAB_HTTP_TEST must be true or false' >&2; exit 1 ;;
 esac
+
+write_names() {
+    # 只接受憑證中逐項列出的網站名稱與 IPv4，避免將任意 Host 或 SAN 寫入轉址設定。
+    sans=$(openssl x509 -in "$1/cert.pem" -noout -ext subjectAltName)
+    printf '%s\n' "$sans" | tr ',' '\n' | sed -nE \
+        -e 's/^[[:space:]]*DNS:(casino\.ye\.wang|crab\.ye\.wang|ye\.wang)[[:space:]]*$/\1 \1;/p' \
+        -e 's/^[[:space:]]*IP Address:(([0-9]{1,3}\.){3}[0-9]{1,3})[[:space:]]*$/\1 \1;/p' > "$2.next"
+    mv "$2.next" "$2"
+}
 
 write_transport() {
     # 路徑及端口皆為固定值；HTTP完全不生成憑證指令。
@@ -24,19 +34,26 @@ write_transport() {
 error_page 497 = @https_navigation;
 location @https_navigation {
     if (\$request_method !~ ^(GET|HEAD)$) { return 400; }
-    if (\$redirect_host = "") { return 400; }
+    if ($5 = "") { return 400; }
     if (\$request_uri !~ ^/) { return 400; }
-    return 302 https://\$redirect_host${4}\$request_uri;
+    return 302 https://${5}${4}\$request_uri;
 }
 NGINX
     fi
 }
 
 umask 077
-write_transport /tmp/public-transport.conf "$public_listener" /run/public-tls ""
-write_transport /tmp/admin-transport.conf "$admin_port" /run/tls ":$admin_port"
-export PUBLIC_LISTEN_PORT ACME_STREAM_INCLUDE
+if [ "${LAB_HTTP_TEST:-false}" = false ]; then
+    write_names /run/public-tls /tmp/public-names.map
+    write_names /run/tls /tmp/admin-names.map
+fi
+# 續期與回復都先更新允許轉址的名稱，再由維護腳本平滑重載既有 master。
+if [ "${1:-}" = refresh-redirects ]; then exit 0; fi
+write_transport /tmp/public-transport.conf "$public_listener" /run/public-tls "" '$public_redirect_host'
+write_transport /tmp/admin-transport.conf "$admin_port" /run/tls ":$admin_port" '$admin_redirect_host'
+export PUBLIC_LISTEN_PORT ACME_STREAM_INCLUDE HTTPS_REDIRECT_INCLUDE
 # 僅替換模式指定的設定，不展開 Nginx 的 $host、$uri 等變數。
-envsubst '${PUBLIC_LISTEN_PORT} ${ACME_STREAM_INCLUDE}' < /etc/lab/nginx.conf.template > /tmp/nginx.conf
+envsubst '${PUBLIC_LISTEN_PORT} ${ACME_STREAM_INCLUDE} ${HTTPS_REDIRECT_INCLUDE}' < /etc/lab/nginx.conf.template > /tmp/nginx.conf
 nginx -t -c /tmp/nginx.conf
+if [ "${1:-}" = check-config ]; then exit 0; fi
 exec nginx -c /tmp/nginx.conf -g 'daemon off;'

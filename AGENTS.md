@@ -13,9 +13,9 @@
 - 寫交易維持ATTACH＋BEGIN IMMEDIATE＋DELETE journal＋FULL synchronous；內容及審計一起提交，鎖內重查權限／版本／關聯，密碼雜湊不持寫鎖。SQL值參數綁定、表名白名單。
 - 公開固定快照後有內容庫journal即503，由管理程序在原環境／原路徑恢復，不刪日誌。只支援單台Linux本機檔案系統、單一admin worker；離線寫入須停管理服務。
 - CSV先預覽再--apply，只新增、既有ID跳過、錯誤整批拒絕；不提供瀏覽器上傳或一般JSON整庫匯入。SQLite10／LABSQL10不兼容舊版，不隱式遷移、覆寫或刪除資料。
-- 全Docker部署，VPS只需既有Docker／Compose及可用維護控制台，SSH可不公開，關閉前須驗證救援入口；不安裝主機Python／venv／systemd排程。SQLite用同一local named volume，管理／維護掛/data，public-api只掛content子目錄唯讀，gateway只掛public子目錄唯讀；init顯式建立空庫，勿刪volume或journal。
+- 全Docker部署，VPS使用既有Docker／Compose及維護控制台，TLS續期只用Ubuntu的root cron，SSH可不公開，關閉前須驗證救援入口；不安裝主機Python／venv／systemd排程。SQLite用同一local named volume，管理／維護掛/data，public-api只掛content子目錄唯讀，gateway只掛public子目錄唯讀；init顯式建立空庫，勿刪volume或journal。
 - 三個常駐容器：gateway共用Nginx、public-api、admin-api；兩API無主機端口且分別只加入frontend_net／admin_net。gateway連兩內網但只掛public子目錄唯讀，公開listener只代理四個GET、不得轉送管理路由／Cookie，管理listener保留帳密／Session／CSRF。tools按需或watch常駐，不開listener、不掛Docker socket。共用Nginx是共用信任及故障邊界，不宣稱兩個入口仍有程序隔離。
-- 不依賴.env、ADMIN_HOST或LAB_ADMIN_ORIGIN；lab.sh固定lab-backend專案及--env-file /dev/null，保留lab-backend_lab_data與lab-content。正式443→8443、管理27182→27182；顯式http模式80→8080、管理27181→27181。舊.env不讀取或自動刪除，不因精簡改用新volume。管理無固定Host白名單，Origin仍比對部署協定＋實際Host含端口，非登入寫入另需CSRF；不信任轉發Host／IP／Proto。
+- 不依賴.env、ADMIN_HOST或LAB_ADMIN_ORIGIN。lab.sh固定lab-backend專案及--env-file /dev/null，保留lab-backend_lab_data與lab-content。正式80→8080只供GET／HEAD轉至同一主機443，官網443→8443、管理27182→27182。顯式http測試模式80→8080提供官網、管理27181→27181。正式轉址目的地須符合該入口憑證的網站域名或公網IPv4。舊.env不讀取或自動刪除，不因精簡改用新volume。管理無固定Host登入白名單，Origin仍比對部署協定＋實際Host含端口，非登入寫入另需CSRF，不信任轉發Host／IP／Proto。
 - HTTP測試LAB_HTTP_TEST=true，使用lab_session_http_test且無Secure；正式false、HTTPS與__Host-lab_session Secure。保留帳密、HttpOnly／SameSite、帳戶狀態及限流；LAB_DEV僅loopback、不與HTTP測試同開。HTTP無憑證掛載、不發HSTS／不跳轉HTTPS，Cloud仍限制管理來源；不加回程式IP清單，換端口不代替權限。兩份正式TLS由gateway唯讀掛載；healthz／readyz僅內部，備份以版本與SHA256配對。
 - Git追蹤（2026-11-19修正）：public_frontend舊gitlink已移除，必要程式／建置設定以普通檔案納入索引；不恢復子模組。dist/data與dist/assets只留初始化來源，不納入Git。索引暫存不代表已提交或推送；部署前用lab.sh check-web核對程式完整性。
 - 全專案排除規則只放根.gitignore／.dockerignore，不新增子目錄或Dockerfile專用排除檔。兩個映像均以專案根目錄為build context，Docker先預設排除全部、逐檔放行必要程式，再由各Dockerfile明確COPY；新增建置依賴須同步根白名單。

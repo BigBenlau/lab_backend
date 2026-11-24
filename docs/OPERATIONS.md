@@ -1,8 +1,8 @@
 # 阿里雲香港 SAS 部署與維護
 
-**同一張 HTTPS 憑證涵蓋 `casino.ye.wang`、`crab.ye.wang`、`ye.wang` 及 SAS 公網 IPv4。** 四個網址都可以開啟同一個官網（443），管理後台在各網址加上 `:27182`，由 SAS 防火牆限制管理員來源。正式環境關閉 80。
+**正式官網使用 443。** 訪客以 HTTP 打開 `casino.ye.wang`、`crab.ye.wang`、`ye.wang` 或 SAS 公網 IPv4 時，80 會將瀏覽器轉到同一網址的 HTTPS。這四個地址共用一張憑證。管理後台使用 `:27182`，由 SAS 防火牆限制管理員來源。
 
-帳號 A 管理 `ye.wang` 的 DNS，帳號 B 管理香港 SAS、Docker 及憑證。若網站已上線，直接完成[三個域名的 DNS 記錄](#site-dns)及[既有 HTTPS 換證](#site-cutover)。首次部署從下方步驟 1 開始。主機指令均在 SAS 專案根目錄執行。
+帳號 A 管理 DNS，帳號 B 管理香港 SAS、Docker 及憑證。已有 HTTPS 且憑證涵蓋上述四個地址，直接按[已上線網站開通 80](#http-redirect-cutover)操作。仍在使用舊憑證的網站先看[既有 HTTPS 換證](#site-cutover)。首次部署從下方步驟 1 開始。
 
 ## 首次部署
 
@@ -18,10 +18,11 @@
 
 | TCP 端口 | 允許來源 | 用途 |
 |---|---|---|
+| 80 | 驗證本機轉址後，開放所有 IPv4，`0.0.0.0/0` | 官網 HTTP 導航轉至同一主機的 HTTPS 443 |
 | 443 | 所有 IPv4，`0.0.0.0/0` | 官網 HTTPS |
 | 27182 | 管理員固定公網出口，例如 `203.0.113.24/32`，或已核准的校內出口 CIDR | 管理頁及登入 API |
 | 22 | 如需 SSH，僅限維護者公網出口 | 首次設定與維護 |
-| 80、27181、其他未使用的 TCP 端口 | 移除入站放行規則 | 正式部署只發布上述兩個 HTTPS 網站入口 |
+| 27181 及其他未使用的 TCP 端口 | 移除入站放行規則 | 27181 只供受控 HTTP 測試環境使用 |
 
 管理入口的來源限制完全由 SAS 防火牆執行。Docker 內部的 8000、8080、8443 無需雲端放行。先用允許的來源連入主機，再確認能用自己的帳戶實際登入控制台的 **VNC 救援連接**，才關閉不再使用的 SSH 規則。一般 SSH 或 Workbench 與救援登入的條件不同。[阿里雲救援連接](https://help.aliyun.com/zh/simple-application-server/user-guide/connect-to-a-server-by-using-the-rescue-feature)
 
@@ -89,10 +90,10 @@ sh deploy/lab.sh build --pull public-api gateway
 
 ### 5. 將同一張憑證安裝到兩個入口，再初始化內容
 
-在 B 的 SAS、已審核的專案根目錄，先確認 443 的使用者並拉取指定映像。若已有其他正式服務佔用 443，先協調維護窗口。腳本只管理本專案的 gateway。
+在 B 的 SAS、已審核的專案根目錄，先確認 80、443 和 27182 的使用者並拉取指定映像。若其他服務佔用所需端口，先與其維護者協調。腳本只管理本專案的 gateway。
 
 ```sh
-sudo ss -ltnp 'sport = :443'
+sudo ss -ltnp '( sport = :80 or sport = :443 or sport = :27182 )'
 sudo docker ps --format 'table {{.Names}}\t{{.Ports}}'
 sudo docker pull goacme/lego:v5.6.0
 ```
@@ -137,26 +138,67 @@ sh deploy/lab.sh admin-info
 sh deploy/lab.sh exec -T gateway nginx -t -c /tmp/nginx.conf
 ```
 
-預期三個常駐服務。只有 `gateway` 發布 IPv4 主機端口，官網 `443 → 8443`、管理 `27182 → 27182`。兩個 Python API 留在各自 Docker 內網。管理傳輸模式應為 `https`、Cookie 名稱 `__Host-lab_session`。正式環境關閉 80，請使用 HTTPS 書籤。若瀏覽器明確連到 443 或 27182，但使用了 `http://`，gateway 會引導瀏覽器改用該入口的 HTTPS 網址。
+預期三個常駐服務。只有 `gateway` 發布 IPv4 主機端口，轉址 `80 → 8080`、官網 `443 → 8443`、管理 `27182 → 27182`。兩個 Python API 留在各自 Docker 內網。管理傳輸模式應為 `https`、Cookie 名稱 `__Host-lab_session`。先在 SAS 執行以下指令，確認收到 `301` 和 `Location: https://casino.ye.wang/`，再按步驟 2 對外放行 TCP 80。
+
+```sh
+curl -sSI -H 'Host: casino.ye.wang' http://127.0.0.1/
+```
 
 <a id="site-check"></a>
 
-從**防火牆允許的外部工作電腦**驗證。在該電腦輸入實際公網 IPv4。三個域名和裸 IP 各自依序應回應 200、200、401。curl 使用預設憑證驗證，會一併檢查網址名稱及信任鏈。再用瀏覽器核對內容、PDF 和管理登入。使用不同主機名稱或 IP 會各自取得管理登入 Cookie。從未獲准的來源確認官網可用、後台 27182 受限。
+從**允許存取後台的外部工作電腦**輸入 SAS 公網 IPv4，執行下列核對。每個地址的前兩項應回應 `301`（官網）及 `302`（後台），兩份 `Location` 均保留原主機，後台另保留 `:27182`。接著跟隨轉址的兩次 GET 應分別到達官網 API 與管理登入頁並回應 `200`，最後的未登入查詢應回應 `401`。curl 預設會核對信任鏈、有效期及網址的域名或 IP。最後用瀏覽器核對登入、頁面、PDF，並從未獲准來源確認只有官網能連入。
 
 ```sh
 SAS_IPV4='請換成 SAS 的實際公網 IPv4'
 for host in casino.ye.wang crab.ye.wang ye.wang "$SAS_IPV4"; do
-  curl -sS -o /dev/null -w '%{http_code}\n' "https://$host/api/home"
-  curl -sS -o /dev/null -w '%{http_code}\n' "https://$host:27182/"
+  curl -sSI "http://$host/api/home?view=recent"
+  curl -sSI "http://$host:27182/"
+  curl -fsSL --max-redirs 1 -o /dev/null -w '%{url_effective} %{http_code}\n' "http://$host/api/home?view=recent"
+  curl -fsSL --max-redirs 1 -o /dev/null -w '%{url_effective} %{http_code}\n' "http://$host:27182/"
   curl -sS -o /dev/null -w '%{http_code}\n' "https://$host:27182/api/v1/auth/session"
 done
 ```
 
-接著設定下方的**自動續期**，並製作[資料配對備份](#配對備份與異地保存)。憑證及 ACME 帳戶狀態另行加密備份到私人儲存。
+接著設定 [root 的續期 cron](#tls-cron)，並製作[資料配對備份](#配對備份與異地保存)。憑證及 ACME 帳戶狀態另行加密備份到私人儲存。
+
+<a id="http-redirect-cutover"></a>
+
+### 已上線網站開通 80（一次性更新）
+
+適用於正在運行正式 HTTPS gateway 的 SAS。先將本次完整部署版本同步到原專案目錄，沿用現有憑證和資料卷。以下步驟只需替換 gateway 一次，替換期間官網與後台會短暫中斷。請避開 root cron 的續期時間。
+
+1. **在舊 gateway 繼續服務時準備映像。** 確認主機 80 可用，若有其他 Nginx 或容器佔用，先協調釋放。最後一行會啟動一次性容器，用現有憑證執行 `nginx -t`，不綁定主機端口。檢查成功才繼續。
+
+```sh
+cd -- "$(sudo cat /var/lib/lab-tls/project)"
+sudo ss -ltnp 'sport = :80'
+sudo docker ps --format 'table {{.Names}}\t{{.Ports}}'
+sudo sh deploy/lab.sh check-web
+sudo sh deploy/lab.sh config --quiet
+sudo sh deploy/lab.sh build gateway
+sudo sh deploy/lab.sh run --rm --no-deps -T gateway check-config
+```
+
+2. **在維護窗口替換 gateway。** 安裝新版續期腳本，使用同一把維護鎖避免與正在進行的換證重疊。兩個 API 繼續運行。
+
+```sh
+sudo flock -w 60 /var/lib/lab-tls/lock sh -ec '
+  install -o root -g root -m 0700 deploy/tls.sh /usr/local/sbin/lab-tls
+  sh deploy/lab.sh up -d --no-deps --force-recreate gateway
+'
+sudo sh deploy/lab.sh ps gateway
+sudo sh deploy/lab.sh exec -T gateway nginx -t -c /tmp/nginx.conf
+sudo /usr/local/sbin/lab-tls renew
+curl -sSI -H 'Host: casino.ye.wang' 'http://127.0.0.1/api/home?view=recent'
+```
+
+3. **開放公網轉址。** 上一行應回應 `301` 和 `Location: https://casino.ye.wang/api/home?view=recent`。若啟動檢查失敗，先以 `sudo sh deploy/lab.sh logs --tail=50 gateway` 查看原因。確認轉址後，在阿里雲 **該 SAS 實例 → 防火牆** 將 TCP 80 開放給 `0.0.0.0/0`，443 繼續公開，27182 只允許管理員出口 IP。從站外完成[四個地址的檢查](#site-check)。
+
+此後沿用既有的單一 root cron。日常續期只在需要時換證並平滑重載 Nginx，官網和後台繼續接收連線。每次續期無需再執行上述建置或替換步驟。
 
 ### HTTPS憑證與自動續期
 
-**保留一個每 6 小時執行 `/usr/local/sbin/lab-tls renew` 的任務。** Let’s Encrypt 的 `shortlived` 憑證有效期為 160 小時，腳本在剩餘約 72 小時時開始續簽。已上線的舊站先完成[切換步驟](#site-cutover)。[Let’s Encrypt 短效憑證規格](https://letsencrypt.org/docs/profiles/#shortlived)
+**由 SAS 的 root cron 每 6 小時執行一次 `/usr/local/sbin/lab-tls renew`。** Let’s Encrypt 的 `shortlived` 憑證有效期為 160 小時，腳本在剩餘約 72 小時時開始續簽。已上線的舊站先完成[切換步驟](#site-cutover)。[Let’s Encrypt 短效憑證規格](https://letsencrypt.org/docs/profiles/#shortlived)
 
 續期時 gateway 持續接收一般 HTTPS 流量，只將 443 上的 `acme-tls/1` 驗證握手轉給 Docker 內網的臨時 lego。安裝前核對憑證識別清單（SAN）恰好含三個 DNS 名稱及一個 IP、信任鏈有效、私鑰配對。腳本再用 `nginx -t` 及平滑 reload 載入新憑證，進行中的請求由舊 worker 完成。最後在 443 與 27182 各驗四次握手：域名送 SNI，裸 IP 核對預設憑證，八次指紋均須相符。有效期充足且兩端都已生效時只做檢查。[Nginx 握手分流](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) · [Nginx 平滑重載](https://nginx.org/en/docs/control.html)
 
@@ -164,13 +206,15 @@ done
 
 #### 已上線的 HTTPS 網站換證
 
-1. 確認[三個域名的 DNS](#site-dns) 均指向 SAS，443 可從公網連入，80 關閉，27182 僅允許管理來源。先把新版部署檔同步至 SAS 原專案目錄。選在舊憑證仍有效且沒有正在執行的換證任務時操作，保留原 ACME 帳戶、掛載目錄和資料卷。
+1. 確認[三個域名的 DNS](#site-dns) 均指向 SAS，443 可從公網連入，27182 僅允許管理來源。憑證驗證使用 443，80 用於官網 HTTP 轉址。將新版部署檔同步至 SAS 原專案目錄。選在舊憑證仍有效且沒有正在執行的換證任務時操作，保留原 ACME 帳戶、掛載目錄和資料卷。
 2. 在 SAS 終端機檢查 gateway 和現有的 IP 設定。將顯示的 IP 與 SAS 控制台核對；曾只用域名的主機可能尚無 `ip` 檔。
 
 ```sh
 cd -- "$(sudo cat /var/lib/lab-tls/project)"
 sudo sh deploy/lab.sh ps gateway
 sudo sh deploy/lab.sh exec -T gateway grep -Fx 'include /etc/lab/acme-stream.conf;' /tmp/nginx.conf
+sudo sh deploy/lab.sh exec -T gateway grep -F 'include /etc/lab/https-redirect.conf;' /tmp/nginx.conf
+sudo sh deploy/lab.sh port gateway 8080
 sudo test ! -f /var/lib/lab-tls/ip || sudo cat /var/lib/lab-tls/ip
 ```
 
@@ -181,13 +225,7 @@ SAS_IPV4='請換成 SAS 控制台顯示的公網 IPv4'
 printf '%s\n' "$SAS_IPV4" | sudo tee /var/lib/lab-tls/ip >/dev/null
 ```
 
-3. 若上方顯示 `include /etc/lab/acme-stream.conf;`，直接進行第 4 步。如正式 HTTPS gateway 正常運行但設定缺少該行，先在維護時段執行下面的一次性更新。重建舊 gateway 會短暫影響兩個入口。此後換證只做平滑重載。
-
-```sh
-sudo sh deploy/lab.sh build gateway
-sudo sh deploy/lab.sh up -d --no-deps --force-recreate gateway
-sudo sh deploy/lab.sh exec -T gateway nginx -t -c /tmp/nginx.conf
-```
+3. 若上方顯示兩個 `include` 且端口映射為 `0.0.0.0:80`，直接進行第 4 步。若缺少任一項，先完成[一次性更新](#http-redirect-cutover)，該流程已包含安裝與執行 `renew`，可直接接第 5 步核對憑證。
 
 4. 安裝新版主機腳本並執行與排程相同的命令。它會沿用 `project`、`email`、`ip` 及原 ACME 帳戶，用獨立的 lego 快取取得共用憑證。舊 `active`、`domain` 檔和舊憑證快取可原樣保留，新腳本只辦理這一組識別。
 
@@ -198,90 +236,45 @@ sudo openssl x509 -in secrets/public-tls/cert.pem -noout -ext subjectAltName -en
 sudo openssl x509 -in secrets/tls/cert.pem -noout -enddate -fingerprint -sha256
 ```
 
-5. 核對 SAN 顯示 `DNS:casino.ye.wang`、`DNS:crab.ye.wang`、`DNS:ye.wang` 和 `IP Address:實際公網IPv4`，兩處指紋應相同。從獲准來源完成[四個網址的外部檢查](#site-check)。檢查 OOS 週期任務及 `sudo crontab -l`，保留一個每 6 小時執行 `lab-tls renew` 的任務。已符合的舊排程直接沿用，原先指定個別模式的任務應停用或改成同一條命令。
+5. 核對 SAN 顯示 `DNS:casino.ye.wang`、`DNS:crab.ye.wang`、`DNS:ye.wang` 和 `IP Address:實際公網IPv4`，兩處指紋應相同。從獲准來源完成[四個網址的外部檢查](#site-check)。然後依下節設定續期 cron。
 
 簽發或憑證驗證失敗時，原有 PEM 繼續服務。若已開始安裝而重載或握手失敗，腳本會嘗試還原兩處 PEM 並平滑重載。中斷的安裝由下次執行先復原。排除 DNS、IP 或 443 可達性問題後，重跑 `sudo /usr/local/sbin/lab-tls renew`。修復期間留意舊憑證的到期日。
 
-#### 選擇排程
+<a id="tls-cron"></a>
 
-本部署建議使用 B 的阿里雲 OOS。OOS 負責定時，SAS 命令助手負責在主機執行命令。可在控制台追查每次結果及配置失敗通知，主機不用另設排程。如果只維護這一台 SAS、希望省去 OOS 和 RAM 角色，也可以使用 Ubuntu 已啟用的 cron。兩者執行同一條命令，只選一個。[OOS 定時觸發](https://www.alibabacloud.com/help/en/oos/user-guide/acs-timertrigger) · [SAS 命令助手](https://help.aliyun.com/zh/simple-application-server/user-guide/use-command-assistant)
+#### 在 Ubuntu 啟用續期 cron
 
-選 cron 時，先用 `systemctl is-active cron` 確認顯示 `active`。用 `sudo crontab -e` 在 root 現有排程末尾加入以下一行，以 `sudo crontab -l` 核對。每 6 小時的第 17 分鐘檢查一次，失敗訊息可用 `sudo journalctl -t lab-tls` 查看。另由站外監測檢查到期日，可發現主機或 cron 停止執行的情況。
+在 SAS 上確認手動執行 `sudo /usr/local/sbin/lab-tls renew` 成功。若剛才已看到「兩個端口已使用有效版本」，直接設定排程即可。
+
+```sh
+sudo systemctl enable --now cron
+sudo crontab -e
+```
+
+在 root 的 crontab 加入以下一行。已有 `lab-tls` 續期條目時，直接取代該條目，保留其他工作。儲存後，cron 會在主機當地時間每日 00:17、06:17、12:17、18:17 執行。[Ubuntu crontab 說明](https://manpages.ubuntu.com/manpages/noble/man5/crontab.5.html)
 
 ```cron
-17 */6 * * * /usr/local/sbin/lab-tls renew || /usr/bin/logger -p daemon.err -t lab-tls 'Certificate renewal check failed'
+17 */6 * * * if /usr/local/sbin/lab-tls renew >/dev/null 2>&1; then /usr/bin/logger -t lab-tls OK; else /usr/bin/logger -p daemon.err -t lab-tls FAILED; exit 1; fi
 ```
 
-#### B 啟用每 6 小時的雲端排程
+用 `sudo crontab -l` 確認只有一條憑證續期工作。首次觸發後可用下列命令查看結果。
 
-1. 在 **B 的香港區 SAS → 實例 → 命令助手** 確認內建 Agent 在線。先手動送出 Shell 命令 `/usr/local/sbin/lab-tls renew`，工作使用者 `root`，逾時 600 秒。查看執行結果，確認退出碼 0，以及兩個入口驗證成功。這條維護通道可在不對公網開放 SSH 的情況下運作。[SAS 命令助手](https://help.aliyun.com/zh/simple-application-server/user-guide/use-command-assistant)
-2. 在 **B 的雲維運編排 OOS（CloudOps Orchestration）** 選香港地域，建立供 OOS 扮演的專用 RAM 角色，信任服務 `oos.aliyuncs.com`。授予 `swas-open:RunCommand` 及 `swas-open:DescribeInvocationResult`，依各操作支援的資源範圍收窄至 B 的香港資源。`RunCommand` 具有在主機執行命令的權限，只讓受信任的維護者編輯範本、啟動任務及傳遞該角色。這個角色用於 B 的主機維護，無須授予 A 的 DNS 權限。[發送命令的授權](https://help.aliyun.com/zh/simple-application-server/developer-reference/api-swas-open-2020-06-01-runcommand) · [結果查詢授權](https://www.alibabacloud.com/help/en/simple-application-server/developer-reference/api-swas-open-2020-06-01-describeinvocationresult)
-3. 在 **OOS → 自訂範本 → 建立範本** 貼入下方 YAML，名稱可用 `Lab-TLS-Renew`。儲存後選「建立執行」，輸入 SAS 實例 ID、角色名、未來的排程結束時間（UTC，例如 `2028-12-31T00:00:00Z`，在結束前延長）。啟動一次並保留週期執行。每次任務先取得命令執行 ID，再等候 SAS 回報成功；送出命令本身不足以證明續期完成。[OOS 定時觸發](https://www.alibabacloud.com/help/en/oos/user-guide/acs-timertrigger) · [等待實際結果](https://www.alibabacloud.com/help/en/oos/user-guide/acs-waitfor)
-
-```yaml
-FormatVersion: OOS-2019-06-01
-Description: Check and deploy the active lab certificate on the Hong Kong SAS
-Parameters:
-  instanceId:
-    Type: String
-  roleName:
-    Type: String
-  endDate:
-    Type: String
-RamRole: '{{ roleName }}'
-Tasks:
-  - Name: timer
-    Action: ACS::TimerTrigger
-    Properties:
-      Type: rate
-      Expression: 360 minutes
-      EndDate: '{{ endDate }}'
-  - Name: send
-    Action: ACS::ExecuteAPI
-    Properties:
-      Service: SWAS-OPEN
-      API: RunCommand
-      Parameters:
-        RegionId: cn-hongkong
-        InstanceId: '{{ instanceId }}'
-        Name: lab-tls-renew
-        Type: RunShellScript
-        CommandContent: /usr/local/sbin/lab-tls renew
-        WorkingUser: root
-        Timeout: 600
-    Outputs:
-      invocation:
-        Type: String
-        ValueSelector: .InvokeId
-  - Name: result
-    Action: ACS::WaitFor
-    Properties:
-      Service: SWAS-OPEN
-      API: DescribeInvocationResult
-      Parameters:
-        RegionId: cn-hongkong
-        InstanceId: '{{ instanceId }}'
-        InvokeId: '{{ send.invocation }}'
-      PropertySelector: .InvocationResult.InvocationStatus
-      DesiredValues: [Success]
-      StopRetryValues: [Invalid, Aborted, Failed, Error, Timeout, Cancelled, Terminated]
-    Retries: 72
-    DelayType: Constant
-    Delay: 10
+```sh
+sudo journalctl -t lab-tls --since today --no-pager
 ```
 
-4. 在 OOS 執行詳情核對首輪的 `send` 和 `result`，之後確認下一輪也有啟動。為任務失敗設定維護者通知，並由獨立監測從管理來源檢查兩端可用性及到期時間，可設剩餘 48 小時仍未更新時告警。若 OOS 執行停止或到達結束日期，需重新啟用。需啟用 OOS 或上述 cron 其中一個，才會定時執行。
+`OK` 表示該次檢查或續期成功，可停用原先專為這張憑證建立的其他排程。`FAILED` 時，在 SAS 手動執行 `sudo /usr/local/sbin/lab-tls renew` 查看原因。站外監測可在憑證剩餘 48 小時仍未更新時通知維護者。
 
 ## 其他部署情境
 
 ### 既有環境切換
 
-- **同一主機，已有 HTTP 測試資料**。先在原模式配對備份（該次備份命令使用 `sh deploy/lab.sh http …`），用 `sh deploy/lab.sh http stop tools` 停止原有監測，準備防火牆及映像後，用 `sh deploy/lab.sh http stop gateway` 停止舊測試入口，確認三個域名的 DNS 和公網 IPv4 已就緒，再執行第 5 步申請網站憑證。以 `sh deploy/lab.sh up -d --force-recreate public-api admin-api gateway` 切換，接步驟 6 驗證；確認雲端 80、27181 的測試放行已撤銷。兩模式共用 `lab-backend_lab_data`，保留原帳戶與內容，跳過 init、seed、CSV 匯入及公開內容安裝。管理員需重新登入。
+- **同一主機，已有 HTTP 測試資料**。先在原模式配對備份（使用 `sh deploy/lab.sh http …`），80 暫時只允許測試來源。用 `sh deploy/lab.sh http stop tools` 停止原有監測，再用 `sh deploy/lab.sh http stop gateway` 停止舊入口，撤銷 27181 的測試放行。確認三個域名及 IP 已就緒，按第 5 步申請憑證。以 `sh deploy/lab.sh up -d --force-recreate public-api admin-api gateway` 切換。接步驟 6 核對正式轉址，再將 80 開放給訪客。兩模式共用 `lab-backend_lab_data`，沿用原帳戶與內容，跳過 init、seed、CSV 匯入及公開內容安裝。管理員需重新登入。
 - **從另一台主機遷移既有資料**。先取得來源主機同版本的資料庫及靜態檔案配對備份。新 SAS 在備好程式、憑證及雲端規則後走[恢復](#恢復)，再按步驟 6 驗證。不同主機上的同名 Docker volume 彼此獨立。
 
 ### HTTP 內容測試
 
-僅在受控來源開放測試端口，使用 `sh deploy/lab.sh http …`。全新測試環境依步驟 4 建映像，將步驟 5 的初始化及步驟 6 的啟動命令加上 `http`；可跳過安裝憑證。官網為 `http://測試主機IPv4/`，管理為 `http://測試主機IPv4:27181/`。HTTP 以明文傳送密碼和 Cookie，使用獨立測試帳密。日常部署預設執行 HTTPS。舊四容器測試環境若仍有已取代的 public-web，先確認其用途並停止它以釋放 80，保留資料 volume。
+先在防火牆將 80 和 27181 限制為受控測試來源，再使用 `sh deploy/lab.sh http …`。全新測試環境依步驟 4 建映像，將步驟 5 的初始化及步驟 6 的啟動命令加上 `http`，可跳過安裝憑證。此模式直接以 HTTP 提供官網 `http://測試主機IPv4/` 和管理登入頁 `http://測試主機IPv4:27181/`。使用獨立測試帳密，兩個模式輪流佔用同一主機的 80。
 
 ## 日常更新、停止與監測
 
@@ -322,22 +315,16 @@ DB備份含五表並互動加密；靜態ZIP含assets、site.json及manifest，�
 
 ### 瀏覽器顯示「The plain HTTP request was sent to HTTPS port」
 
-這表示瀏覽器已連到正式端口，但使用了明文 HTTP。可以直接把網址開頭改為 `https://`。要讓既有部署自動轉址，將新版程式同步到 SAS 後，在專案根目錄重建 gateway 映像並替換容器。兩個頁面入口會短暫中斷。
-
-```sh
-sudo sh deploy/lab.sh build gateway
-sudo sh deploy/lab.sh up -d --no-deps --force-recreate gateway
-```
-
-從防火牆允許的電腦，用憑證涵蓋的子域名核對。
+先確認使用憑證涵蓋的網址。從管理防火牆允許的電腦，用以下命令檢查訪客的第一個回應。
 
 ```sh
 SITE=casino.ye.wang
+curl -sSI "http://$SITE/api/home?view=recent"
 curl -sSI "http://$SITE:443/api/home?view=recent"
 curl -sSI "http://$SITE:27182/"
 ```
 
-兩次都應回應 `302`。官網的 `Location` 應為 `https://主機/api/home?view=recent`，後台則為 `https://主機:27182/`。轉址適用於 GET／HEAD，登入及其他明文寫入會回應 400。請直接在 HTTPS 頁面輸入帳密。省略端口的 `http://主機/` 會連向已關閉的 80。HTTP 測試模式仍使用原來的明文入口。
+應依次回應 `301`、`302`、`302`。前兩個目的地為 `https://casino.ye.wang/api/home?view=recent`，第三個為 `https://casino.ye.wang:27182/`。明文轉址只接受 GET／HEAD，未列入該入口憑證的主機和明文寫入均回應 400。請先打開 HTTPS 登入頁，再輸入帳密。若仍顯示舊的 Nginx 錯誤頁，核對[一次性更新](#http-redirect-cutover)中的實際端口映射及執行中的 gateway。
 
 ### 資料與容器位置
 
@@ -382,7 +369,7 @@ Nginx設定已打包到gateway，不再掛主機HTTP設定片段。映像內chmo
 
 ### 管理端口核對與空回應排錯
 
-IP 階段以公網 IPv4 連線，切換後改用實際域名。`0.0.0.0` 是監聽位址；在主機上診斷 HTTP 測試入口可用以下命令。
+正式管理入口可用憑證中的任一域名或 SAS 公網 IPv4 加 `:27182`。`0.0.0.0` 是監聽位址。在主機上診斷 HTTP 測試入口可用以下命令。
 
 ```sh
 sh deploy/lab.sh http admin-info

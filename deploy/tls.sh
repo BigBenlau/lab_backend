@@ -21,7 +21,13 @@ lab() { sh deploy/lab.sh "$@"; }
 reload_gateway() {
   local attempt
   for attempt in {1..10}; do
-    if lab exec -T gateway sh -c 'test -s /tmp/nginx.pid && nginx -t -c /tmp/nginx.conf && nginx -s reload -c /tmp/nginx.conf'; then return 0; fi
+    if lab exec -T gateway sh -ec '
+      test -s /tmp/nginx.pid
+      if [ -f /etc/lab/https-redirect.conf ]; then
+        sh /etc/lab/entrypoint.sh refresh-redirects
+      fi
+      nginx -t -c /tmp/nginx.conf && nginx -s reload -c /tmp/nginx.conf
+    '; then return 0; fi
     sleep 1
   done
   return 1
